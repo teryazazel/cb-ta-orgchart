@@ -1,0 +1,13 @@
+# Netlify config — keep all assets fresh so edits show up immediately
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/src/*"
+  [headers.values]
+    Cache-Control = "no-store"

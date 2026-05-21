@@ -1,0 +1,22 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Local recordings/screenshots
+*.mp4
+Recording*.mp4
+
+# Local-only dev server
+# (serve.ps1 is fine to commit but won't run on hosts)
+
+# Dependencies (not needed for this CDN-only project)
+node_modules/
+package-lock.json
+
+# Logs
+*.log

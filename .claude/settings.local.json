@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(cd '/c/Users/Sakdipat/.claude/projects/C--Users-Sakdipat-Desktop-CB-TA-ORG/2b93e288-ecc5-412b-8fda-cbd5861badc2/tool-results/' && ls -la && file webfetch-1778816974029-suz716.bin)",
+      "Bash(mkdir -p '/c/Users/Sakdipat/Desktop/CB TA/ORG/_design_extract')",
+      "Bash(tar -xzf '/c/Users/Sakdipat/.claude/projects/C--Users-Sakdipat-Desktop-CB-TA-ORG/2b93e288-ecc5-412b-8fda-cbd5861badc2/tool-results/webfetch-1778816974029-suz716.bin')",
+      "Bash(cp -r _design_extract/org-chart/project/* .)",
+      "Read(//c/c/Users/Sakdipat/Desktop/CB TA/**)",
+      "Read(//c/c/Users/Sakdipat/Desktop/CB TA/ORG/**)",
+      "Bash(cd '/c/Users/Sakdipat/Desktop/CB TA/ORG' && rm -rf screenshots _design_extract && ls -la)",
+      "Bash(npx --version)",
+      "PowerShell(Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','.\\\\serve.ps1' -WorkingDirectory $PWD; Start-Sleep -Seconds 2; try { $r = Invoke-WebRequest -Uri 'http://localhost:8765/Org%20Chart.html' -UseBasicParsing -TimeoutSec 5; Write-Output \"Status: $\\($r.StatusCode\\), Length: $\\($r.Content.Length\\)\" } catch { Write-Output \"Error: $_\" })",
+      "PowerShell(Start-Sleep -Seconds 3; try { $r = Invoke-WebRequest -Uri 'http://localhost:8765/Org%20Chart.html' -UseBasicParsing -TimeoutSec 5; Write-Output \"Status: $\\($r.StatusCode\\), Length: $\\($r.Content.Length\\)\" } catch { Write-Output \"Error: $\\($_.Exception.Message\\)\" }; Get-NetTCPConnection -LocalPort 8765 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,State)",
+      "PowerShell(.\\\\serve.ps1)",
+      "Bash(cat '/c/Users/Sakdipat/AppData/Local/Temp/claude/C--Users-Sakdipat-Desktop-CB-TA-ORG/2b93e288-ecc5-412b-8fda-cbd5861badc2/tasks/bv4x23pqm.output' | head -50)",
+      "PowerShell(powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\\\serve.ps1)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8765/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8765/src/app.jsx)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8765/src/utils.jsx)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8765/src/canvas.jsx)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8765/src/card.jsx)",
+      "mcp__Claude_in_Chrome__navigate",
+      "mcp__Claude_in_Chrome__computer",
+      "mcp__Claude_in_Chrome__browser_batch",
+      "mcp__Claude_in_Chrome__list_connected_browsers",
+      "mcp__Claude_in_Chrome__select_browser",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "mcp__Claude_in_Chrome__tabs_create_mcp",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}
