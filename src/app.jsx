@@ -854,15 +854,25 @@ function App() {
   const layoutKeyCount = Object.keys(layout).length;
   const hasFitOnceRef = React.useRef(false);
   React.useEffect(() => {
-    // Re-fit whenever:
-    //  • the layout mode changes, OR
-    //  • we just got our first non-empty layout (data finally arrived from
-    //    Firestore — viewers especially need this).
     if (layoutKeyCount === 0) return;
-    const isFirstFit = !hasFitOnceRef.current;
-    hasFitOnceRef.current = true;
-    const id = setTimeout(zoomFit, isFirstFit ? 250 : 100);
-    return () => clearTimeout(id);
+    // zoomFit reads window.__chartSetTransform which is published by the
+    // canvas component on mount. On a fresh viewer's first paint the canvas
+    // may not be mounted yet, so retry up to ~2s until it's ready.
+    let attempts = 0;
+    let timer = null;
+    const tryFit = () => {
+      if (window.__chartSetTransform) {
+        console.log('%c[auto-fit] firing (layoutKeys=' + layoutKeyCount + ', attempt=' + attempts + ')', 'color:#4FD1A5');
+        zoomFit();
+        hasFitOnceRef.current = true;
+      } else if (attempts++ < 20) {
+        timer = setTimeout(tryFit, 100);
+      } else {
+        console.warn('[auto-fit] gave up after ~2s — __chartSetTransform never appeared');
+      }
+    };
+    timer = setTimeout(tryFit, hasFitOnceRef.current ? 100 : 200);
+    return () => { if (timer) clearTimeout(timer); };
   }, [t.layout, layoutKeyCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Print — A4 landscape with approval signatures.
