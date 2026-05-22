@@ -7,6 +7,7 @@ function Toolbar({
   totalPeople, totalDepts,
   orgName, onOrgNameChange, logoUrl, onLogoUpload,
   viewMode, onViewModeChange,
+  canWrite = true, syncStatus, onOpenUserMgmt,
 }) {
   const [searchFocus, setSearchFocus] = React.useState(false);
   const fileRef = React.useRef(null);
@@ -38,8 +39,9 @@ function Toolbar({
         <button
           type="button"
           className="brand-logo"
-          onClick={() => fileRef.current && fileRef.current.click()}
-          title="คลิกเพื่ออัปโหลดโลโก้"
+          onClick={() => canWrite && fileRef.current && fileRef.current.click()}
+          title={canWrite ? "คลิกเพื่ออัปโหลดโลโก้" : "โหมดดูอย่างเดียว"}
+          style={canWrite ? {} : { cursor: 'default' }}
         >
           {logoUrl ? (
             <img src={logoUrl} alt="logo" />
@@ -67,7 +69,8 @@ function Toolbar({
             placeholder="ชื่อองค์การ"
             onChange={(e) => onOrgNameChange && onOrgNameChange(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-            title="คลิกเพื่อแก้ไขชื่อองค์การ"
+            title={canWrite ? "คลิกเพื่อแก้ไขชื่อองค์การ" : "โหมดดูอย่างเดียว"}
+            readOnly={!canWrite}
           />
           <div className="brand-sub">Org Chart · {totalPeople} people · {totalDepts} depts</div>
         </div>
@@ -199,15 +202,31 @@ function Toolbar({
         </button>
       </div>
 
-      <button className="tb-btn" onClick={onAddDept} title="สร้างฝ่ายใหม่">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="12" height="3" rx="1" stroke="currentColor" strokeWidth="1.3" /><rect x="2" y="9" width="12" height="3" rx="1" stroke="currentColor" strokeWidth="1.3" /></svg>
-        เพิ่มฝ่าย
-      </button>
+      {canWrite && (
+        <>
+          <button className="tb-btn" onClick={onAddDept} title="สร้างฝ่ายใหม่">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="12" height="3" rx="1" stroke="currentColor" strokeWidth="1.3" /><rect x="2" y="9" width="12" height="3" rx="1" stroke="currentColor" strokeWidth="1.3" /></svg>
+            เพิ่มฝ่าย
+          </button>
 
-      <button className="tb-btn accent" onClick={() => onAddPerson(null)} title="เพิ่มคนใหม่">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="6" r="2.5" stroke="currentColor" strokeWidth="1.4" /><path d="M2.5 13c.5-2.2 2.2-3.4 3.5-3.4M11 7v4M9 9h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
-        เพิ่มคน
-      </button>
+          <button className="tb-btn accent" onClick={() => onAddPerson(null)} title="เพิ่มคนใหม่">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="6" r="2.5" stroke="currentColor" strokeWidth="1.4" /><path d="M2.5 13c.5-2.2 2.2-3.4 3.5-3.4M11 7v4M9 9h4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></svg>
+            เพิ่มคน
+          </button>
+        </>
+      )}
+
+      {/* Sync badge + user menu */}
+      {typeof SyncBadge === 'function' && syncStatus && (
+        <div style={{ marginLeft: 6 }}>
+          <SyncBadge status={syncStatus} />
+        </div>
+      )}
+      {typeof UserMenu === 'function' && (
+        <div style={{ marginLeft: 6 }}>
+          <UserMenu onOpenUserMgmt={onOpenUserMgmt} />
+        </div>
+      )}
     </div>
   );
 }

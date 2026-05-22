@@ -1,0 +1,70 @@
+rules_version = '2';
+
+// CB TA TRADING Org Chart — Firestore Security Rules
+//
+// Permission model:
+//   - admin   = read/write everything; can manage user roles
+//   - editor  = read/write org data; cannot change roles
+//   - viewer  = read-only
+//   - guest   = (unauthenticated) — NO access
+//
+// Paste this entire file into:
+//   Firebase Console → Firestore Database → Rules tab → Publish
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ───────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function userRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && userRole() == 'admin';
+    }
+
+    function canEdit() {
+      return isSignedIn() && (userRole() == 'admin' || userRole() == 'editor');
+    }
+
+    // ── users/{uid} — one doc per signed-in user with their role ─────
+    match /users/{userId} {
+      // Read: own doc or any admin
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+
+      // Create: only on first sign-in (own uid, email matches auth token).
+      // We let the client choose the role — auth.jsx enforces:
+      //   - 'admin' only if email is in ADMIN_EMAILS whitelist
+      //   - 'viewer' for everyone else
+      allow create: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.role in ['admin', 'editor', 'viewer'];
+
+      // Update: admin only (so viewers can't self-promote)
+      // EXCEPTION: own user may update their own displayName (but not role)
+      allow update: if isAdmin()
+        || (isSignedIn() && request.auth.uid == userId
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.email == resource.data.email);
+
+      // Delete: admin only
+      allow delete: if isAdmin();
+    }
+
+    // ── orgs/{orgId} — shared org chart data ────────────────────────
+    match /orgs/{orgId} {
+      allow read:  if isSignedIn();
+      allow write: if canEdit();
+    }
+
+    // ── Everything else: deny by default ────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

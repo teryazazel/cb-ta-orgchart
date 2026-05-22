@@ -24,6 +24,11 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 }/*EDITMODE-END*/;
 
 function App() {
+  // ── Auth ─────────────────────────────────────────────
+  const { user, role } = (typeof useAuth === 'function') ? useAuth() : { user: null, role: 'admin' };
+  const canWrite = role === 'admin' || role === 'editor';
+  const [showUserMgmt, setShowUserMgmt] = React.useState(false);
+
   const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
 
   // Apply theme
@@ -106,6 +111,41 @@ function App() {
       else localStorage.removeItem('orgLogo');
     } catch (e) {}
   }, [logoUrl]);
+
+  // ── Firestore real-time sync ─────────────────────────
+  // Push/pull these fields between every connected client.
+  // Per-user view state (zoom, custom positions, collapsed) stays local.
+  const syncedState = React.useMemo(() => ({
+    people, departments, collaborations, coOversight, deptLinks,
+    orgName, logoUrl, history,
+  }), [people, departments, collaborations, coOversight, deptLinks, orgName, logoUrl, history]);
+
+  const applyRemote = React.useCallback((data) => {
+    if (data.people         !== undefined) setPeople(data.people);
+    if (data.departments    !== undefined) setDepartments(data.departments);
+    if (data.collaborations !== undefined) setCollaborations(data.collaborations);
+    if (data.coOversight    !== undefined) setCoOversight(data.coOversight);
+    if (data.deptLinks      !== undefined) setDeptLinks(data.deptLinks);
+    if (data.orgName        !== undefined) setOrgName(data.orgName);
+    if (data.logoUrl        !== undefined) setLogoUrl(data.logoUrl);
+    if (data.history        !== undefined) setHistory(data.history);
+  }, []);
+
+  const { syncStatus, didFirstLoad, bootstrap } = (typeof useFirestoreSync === 'function')
+    ? useFirestoreSync(syncedState, applyRemote, canWrite, user?.uid)
+    : { syncStatus: 'no-doc', didFirstLoad: true, bootstrap: async () => ({ didBootstrap: false }) };
+
+  // First-time migration: if Firestore is empty and we're admin, push local data up
+  const bootstrapDoneRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!didFirstLoad || syncStatus !== 'no-doc' || role !== 'admin' || bootstrapDoneRef.current) return;
+    bootstrapDoneRef.current = true;
+    bootstrap().then((r) => {
+      if (r && r.didBootstrap) {
+        flashToast('นำข้อมูล local ขึ้น Firestore — ทุกอุปกรณ์เห็นเหมือนกันแล้ว');
+      }
+    });
+  }, [didFirstLoad, syncStatus, role]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [selectedId, setSelectedId] = React.useState(null);
   const [searchQ, setSearchQ] = React.useState('');
@@ -230,8 +270,16 @@ function App() {
     setHistory(h => [...h, { ts: Date.now(), type, who, msg }]);
   };
 
+  // Permission guard — call at the top of any mutating action
+  const requireWrite = () => {
+    if (canWrite) return true;
+    flashToast('🔒 โหมดดูอย่างเดียว — ติดต่อ Admin เพื่อขอสิทธิ์แก้ไข');
+    return false;
+  };
+
   // ── Actions ─────────────────────────────────────────
   const patchPerson = (id, patch, logMsg) => {
+    if (!requireWrite()) return;
     setPeople(ps => ps.map(p => p.id === id ? { ...p, ...patch } : p));
     if (logMsg) {
       const type = patch.lv != null
@@ -245,6 +293,7 @@ function App() {
   };
 
   const reparent = (id, newParentId) => {
+    if (!requireWrite()) return;
     if (id === newParentId) return;
     if (isDescendant(newParentId, id, childrenOf)) return;
     const p = byId[id], np = byId[newParentId];
@@ -258,6 +307,7 @@ function App() {
   const collabKey = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
 
   const addCollaboration = (a, b) => {
+    if (!requireWrite()) return;
     if (!a || !b || a === b) return;
     const key = collabKey(a, b);
     if (collaborations.some(c => collabKey(c.a, c.b) === key)) return;
@@ -268,6 +318,7 @@ function App() {
   };
 
   const removeCollaboration = (a, b) => {
+    if (!requireWrite()) return;
     const key = collabKey(a, b);
     setCollaborations(cs => cs.filter(c => collabKey(c.a, c.b) !== key));
     const pa = byId[a], pb = byId[b];
@@ -277,17 +328,20 @@ function App() {
 
   // Co-oversight — secondary management links for the dept overview
   const addCoOversight = (deptId, personId) => {
+    if (!requireWrite()) return;
     setCoOversight(cs => {
       if (cs.some(c => c.deptId === deptId && c.personId === personId)) return cs;
       return [...cs, { deptId, personId }];
     });
   };
   const removeCoOversight = (deptId, personId) => {
+    if (!requireWrite()) return;
     setCoOversight(cs => cs.filter(c => !(c.deptId === deptId && c.personId === personId)));
   };
 
   // Sub-branches inside a dept (e.g., Branch dept → physical branch locations)
   const addBranch = (deptId, name, nameEn) => {
+    if (!requireWrite()) return;
     if (!deptId || !name) return;
     const newBranch = { id: 'br-' + Math.random().toString(36).slice(2, 7), name, nameEn: nameEn || '' };
     setDepartments(ds => ds.map(d => d.id === deptId
@@ -299,12 +353,14 @@ function App() {
     flashToast(`เพิ่มสาขา ${name}`);
   };
   const editBranch = (deptId, branchId, patch) => {
+    if (!requireWrite()) return;
     setDepartments(ds => ds.map(d => d.id === deptId
       ? { ...d, branches: (d.branches || []).map(b => b.id === branchId ? { ...b, ...patch } : b) }
       : d
     ));
   };
   const deleteBranch = (deptId, branchId) => {
+    if (!requireWrite()) return;
     const dept = departments.find(d => d.id === deptId);
     const br = (dept?.branches || []).find(b => b.id === branchId);
     setDepartments(ds => ds.map(d => d.id === deptId
@@ -319,6 +375,7 @@ function App() {
 
   // Dept→dept oversight links (e.g., Operation + Operation Support both manage Branch)
   const addDeptLink = (fromDeptId, toDeptId) => {
+    if (!requireWrite()) return;
     if (!fromDeptId || !toDeptId || fromDeptId === toDeptId) return;
     setDeptLinks(ls => {
       if (ls.some(l => l.from === fromDeptId && l.to === toDeptId)) return ls;
@@ -330,6 +387,7 @@ function App() {
     flashToast(`เชื่อม ${fd?.name} ดูแล ${td?.name}`);
   };
   const removeDeptLink = (fromDeptId, toDeptId) => {
+    if (!requireWrite()) return;
     setDeptLinks(ls => ls.filter(l => !(l.from === fromDeptId && l.to === toDeptId)));
   };
 
@@ -347,6 +405,7 @@ function App() {
   // same old dept (so a whole team moves with its manager — matches what
   // happens when a person is first created under a parent and inherits dept).
   const changeDept = (id, newDeptId) => {
+    if (!requireWrite()) return;
     const p = byId[id];
     if (!p) return;
     const oldDeptId = p.deptId;
@@ -373,6 +432,7 @@ function App() {
   // Cut the reporting line: child becomes a root (no parent). Used by the
   // edge-click menu in the canvas.
   const detach = (id) => {
+    if (!requireWrite()) return;
     const p = byId[id];
     if (!p || !p.parentId) return;
     const oldParent = byId[p.parentId];
@@ -382,6 +442,7 @@ function App() {
   };
 
   const deletePerson = (id) => {
+    if (!requireWrite()) return;
     const p = byId[id];
     if (!p) return;
     const kids = (childrenOf[id] || []).map(kid => byId[kid]);
@@ -432,6 +493,7 @@ function App() {
   };
 
   const addPerson = (data) => {
+    if (!requireWrite()) return;
     // data may be a single object OR an array (group add from modal)
     const items = Array.isArray(data) ? data : [data];
 
@@ -472,6 +534,7 @@ function App() {
   };
 
   const addDept = (data) => {
+    if (!requireWrite()) return;
     const id = 'd-' + Math.random().toString(36).slice(2, 7);
     setDepartments(ds => [...ds, { id, ...data }]);
     log('create', null, `สร้างฝ่าย "${data.name}"`);
@@ -481,6 +544,7 @@ function App() {
 
   // Inline dept creation from AddPersonModal — returns the new dept ID
   const addDeptInline = (data) => {
+    if (!requireWrite()) return null;
     const id = 'd-' + Math.random().toString(36).slice(2, 7);
     setDepartments(ds => [...ds, { id, ...data }]);
     log('create', null, `สร้างฝ่าย "${data.name}"`);
@@ -489,6 +553,7 @@ function App() {
   };
 
   const editDept = (id, patch) => {
+    if (!requireWrite()) return;
     const prev = departments.find(d => d.id === id);
     setDepartments(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d));
     if (prev && patch.name && prev.name !== patch.name) {
@@ -502,6 +567,7 @@ function App() {
   };
 
   const deleteDept = (id, reassignToId) => {
+    if (!requireWrite()) return;
     console.log('[app] deleteDept called', { id, reassignToId });
     const dept = departments.find(d => d.id === id);
     if (!dept) {
@@ -544,6 +610,7 @@ function App() {
   };
 
   const setPhoto = (id, dataUrl) => {
+    if (!requireWrite()) return;
     const p = byId[id];
     setPeople(ps => ps.map(x => x.id === id ? { ...x, photo: dataUrl } : x));
     log('edit', id, `อัปเดตรูป ${p.name}`);
@@ -764,19 +831,32 @@ function App() {
         onZoomOut={() => zoomBy(1 / 1.2)}
         onZoomFit={zoomFit}
         onZoomTo={zoomTo}
-        onAddPerson={(parentId) => { setAddPersonParent(parentId); setShowAddPerson(true); }}
-        onAddDept={() => setShowAddDept(true)}
+        onAddPerson={(parentId) => { if (!requireWrite()) return; setAddPersonParent(parentId); setShowAddPerson(true); }}
+        onAddDept={() => { if (!requireWrite()) return; setShowAddDept(true); }}
         onOpenHistory={() => setShowHistory(true)}
         onExport={onExport}
         totalPeople={people.length}
         totalDepts={departments.length}
         orgName={orgName}
-        onOrgNameChange={setOrgName}
+        onOrgNameChange={canWrite ? setOrgName : () => {}}
         logoUrl={logoUrl}
-        onLogoUpload={(url) => { setLogoUrl(url); flashToast('อัปเดตโลโก้แล้ว'); }}
+        onLogoUpload={(url) => { if (!requireWrite()) return; setLogoUrl(url); flashToast('อัปเดตโลโก้แล้ว'); }}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
+        canWrite={canWrite}
+        syncStatus={syncStatus}
+        onOpenUserMgmt={() => setShowUserMgmt(true)}
       />
+
+      {!canWrite && (
+        <div className="readonly-banner">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+            <rect x="3.5" y="7" width="9" height="6.5" rx="1.2" stroke="currentColor" strokeWidth="1.4" />
+            <path d="M5.5 7V5a2.5 2.5 0 015 0v2" stroke="currentColor" strokeWidth="1.4" />
+          </svg>
+          โหมดดูอย่างเดียว · คุณเป็น <b>Viewer</b> — ติดต่อ Admin เพื่อขอสิทธิ์แก้ไข
+        </div>
+      )}
 
       <div className="chart-area" style={{ position: 'relative', overflow: 'hidden', minHeight: 0 }}>
 
@@ -946,6 +1026,10 @@ function App() {
         );
       })()}
 
+      {showUserMgmt && typeof UserManagementModal === 'function' && (
+        <UserManagementModal onClose={() => setShowUserMgmt(false)} />
+      )}
+
       <TweaksPanel title="Tweaks">
         <TweakSection label="Layout">
           <TweakRadio label="รูปแบบ" value={t.layout}
@@ -1023,4 +1107,17 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// Wrap with AuthProvider + AuthGate so login is required before App renders.
+// If auth.jsx didn't load (e.g., Firebase SDK failed), fall back to plain App.
+if (typeof AuthProvider === 'function' && typeof AuthGate === 'function') {
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <AuthProvider>
+      <AuthGate>
+        <App />
+      </AuthGate>
+    </AuthProvider>
+  );
+} else {
+  console.warn('[app] Auth not available — rendering without login gate');
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+}
