@@ -264,11 +264,9 @@ function App() {
   }, [didFirstLoad, syncStatus, role, people.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-heal: detect broken logo data URL and silently restore from SEED ─
-  // Older buggy versions pushed a mojibake-corrupted base64 string up to
-  // Firestore. Every fresh load pulls that back down and shows alt text in
-  // place of the logo. Catch this by trying to load the URL in an off-DOM
-  // Image; if it errors and we're admin with a known-good SEED.logo, push
-  // the clean SEED back up to Firestore automatically.
+  // Older buggy versions pushed a mojibake-corrupted base64 string to Firestore.
+  // Detect it by validating that the body after the comma is pure base64
+  // (A-Z a-z 0-9 + / =). Mojibake injects non-ASCII bytes, which fail this.
   const autoHealLogoRef = React.useRef(false);
   React.useEffect(() => {
     if (autoHealLogoRef.current) return;
@@ -277,26 +275,33 @@ function App() {
     if (!logoUrl || !logoUrl.startsWith('data:')) return;
     if (!SEED.logo || SEED.logo === logoUrl) return; // already clean
 
-    const probe = new Image();
-    let cancelled = false;
-    probe.onload = () => { /* logo is fine, leave it alone */ };
-    probe.onerror = () => {
-      if (cancelled || autoHealLogoRef.current) return;
-      autoHealLogoRef.current = true;
-      console.warn('%c[auto-heal] logo failed to load — restoring full SEED to Firestore', 'color:#FF6B47;font-weight:bold');
-      const payload = buildSeedPayload();
-      forceWrite(payload).then((r) => {
-        if (r.ok) {
-          applyPayloadLocal(payload);
-          flashToast('โลโก้เสีย — คืนค่าจาก seed อัตโนมัติแล้ว');
-        } else {
-          console.error('[auto-heal] forceWrite failed:', r);
-          autoHealLogoRef.current = false; // allow retry on next change
-        }
-      });
-    };
-    probe.src = logoUrl;
-    return () => { cancelled = true; };
+    // Detect broken base64: anything outside [A-Za-z0-9+/=] after the comma
+    const commaIdx = logoUrl.indexOf(',');
+    const payload = commaIdx === -1 ? logoUrl : logoUrl.slice(commaIdx + 1);
+    const hasInvalidChars = /[^A-Za-z0-9+/=]/.test(payload);
+    if (!hasInvalidChars) {
+      // Looks structurally valid — only heal if it differs hugely in length
+      // (mojibake doubles/triples char count vs the clean version).
+      const lenRatio = logoUrl.length / SEED.logo.length;
+      if (lenRatio > 0.8 && lenRatio < 1.25) return; // close enough, leave alone
+    }
+
+    autoHealLogoRef.current = true;
+    console.warn('%c[auto-heal] logo URL malformed — restoring SEED to Firestore', 'color:#FF6B47;font-weight:bold', {
+      currentLen: logoUrl.length,
+      seedLen: SEED.logo.length,
+      hasInvalidChars,
+    });
+    const seedPayload = buildSeedPayload();
+    forceWrite(seedPayload).then((r) => {
+      if (r.ok) {
+        applyPayloadLocal(seedPayload);
+        flashToast('โลโก้เสีย — คืนค่าจาก seed อัตโนมัติแล้ว');
+      } else {
+        console.error('[auto-heal] forceWrite failed:', r);
+        autoHealLogoRef.current = false;
+      }
+    });
   }, [logoUrl, role, canWrite, didFirstLoad, syncStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [selectedId, setSelectedId] = React.useState(null);
@@ -307,7 +312,25 @@ function App() {
   // Custom positions: when user drags a card onto empty canvas, we save where
   // they dropped it. Layout always honors customPos before falling back to the
   // tree-computed position.
-  const [customPos, setCustomPos] = React.useState(() => loadSaved('orgCustomPos', SEED.customPos || {}));
+  //
+  // IMPORTANT: do NOT seed from SEED.customPos — the baked seed contains an
+  // admin's old pan-around arrangement with x-coords spanning ~15k pixels,
+  // which makes the chart appear empty at min zoom. Also discard any saved
+  // customPos that has crazy out-of-range values, in case localStorage cached
+  // the broken seed.
+  const [customPos, setCustomPos] = React.useState(() => {
+    const saved = loadSaved('orgCustomPos', {});
+    if (!saved || typeof saved !== 'object') return {};
+    const xs = Object.values(saved).map(p => p && p.x).filter(x => typeof x === 'number');
+    if (xs.length === 0) return saved;
+    const maxAbsX = Math.max(...xs.map(Math.abs));
+    if (maxAbsX > 4000) {
+      console.warn('[init] discarding saved customPos — x range exceeds 4000 (legacy bake)', { maxAbsX });
+      try { localStorage.removeItem('orgCustomPos'); } catch (e) {}
+      return {};
+    }
+    return saved;
+  });
   React.useEffect(() => {
     try { localStorage.setItem('orgCustomPos', JSON.stringify(customPos)); } catch (e) {}
   }, [customPos]);
