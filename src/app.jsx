@@ -176,8 +176,10 @@ function App() {
     setCoOversight(asArr(payload.coOversight));
     setDeptLinks(asArr(payload.deptLinks));
     setHistory(asArr(payload.history));
-    if (payload.orgName) setOrgName(payload.orgName);
-    if (payload.logoUrl) setLogoUrl(payload.logoUrl);
+    // Always set name/logo (even if payload value is empty) so we overwrite
+    // any stale value (e.g. a broken base64 data URL) from a previous push.
+    setOrgName(payload.orgName || 'CB TA TRADING');
+    setLogoUrl(payload.logoUrl || '');
   }, []);
 
   // Manual "Restore from seed" — admin can click this if auto-recovery missed
@@ -846,11 +848,22 @@ function App() {
     });
   };
 
-  // Auto-fit on mount + layout change
+  // Auto-fit on mount + layout-mode change + after data first arrives.
+  // Tracking layout key count (not the layout object identity) avoids re-fitting
+  // every time the user pans/drags a card.
+  const layoutKeyCount = Object.keys(layout).length;
+  const hasFitOnceRef = React.useRef(false);
   React.useEffect(() => {
-    const id = setTimeout(zoomFit, 100);
+    // Re-fit whenever:
+    //  • the layout mode changes, OR
+    //  • we just got our first non-empty layout (data finally arrived from
+    //    Firestore — viewers especially need this).
+    if (layoutKeyCount === 0) return;
+    const isFirstFit = !hasFitOnceRef.current;
+    hasFitOnceRef.current = true;
+    const id = setTimeout(zoomFit, isFirstFit ? 250 : 100);
     return () => clearTimeout(id);
-  }, [t.layout]);
+  }, [t.layout, layoutKeyCount]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Print — A4 landscape with approval signatures.
   // Strategy: compute fit-to-print-area transform, set it as a CSS variable on
