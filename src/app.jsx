@@ -171,21 +171,37 @@ function App() {
 
   // Manual "Restore from seed" — admin can click this if auto-recovery missed
   const handleRestoreFromSeed = React.useCallback(async () => {
+    console.log('%c[restore-seed] clicked', 'color:#FF6B47;font-weight:bold', {
+      seedKeys: Object.keys(SEED),
+      seedPeopleLen: Array.isArray(SEED.people) ? SEED.people.length : 'not-array',
+      seedDeptsLen: Array.isArray(SEED.departments) ? SEED.departments.length : 'not-array',
+      role,
+      canWrite,
+    });
     const seedPeople = Array.isArray(SEED.people) ? SEED.people : [];
     if (seedPeople.length === 0) {
-      flashToast('ไม่พบ seed data');
+      flashToast('ไม่พบ seed data — window.SEED_DATA.people ว่าง');
+      console.error('[restore-seed] SEED.people is empty or not an array', SEED);
       return;
     }
-    if (!confirm(`คืนค่าข้อมูลจาก seed (${seedPeople.length} คน) ทับข้อมูลปัจจุบัน?`)) return;
+    if (!confirm(`คืนค่าข้อมูลจาก seed (${seedPeople.length} คน) ทับข้อมูลปัจจุบัน?`)) {
+      console.log('[restore-seed] user cancelled');
+      return;
+    }
     const payload = buildSeedPayload();
+    console.log('[restore-seed] payload built', {
+      peopleLen: payload.people.length,
+      deptsLen: payload.departments.length,
+    });
     const r = await forceWrite(payload);
+    console.log('[restore-seed] forceWrite result', r);
     if (r.ok) {
       applyPayloadLocal(payload);
       flashToast(`คืนค่าจาก seed สำเร็จ (${seedPeople.length} คน)`);
     } else {
       flashToast('คืนค่าไม่สำเร็จ: ' + (r.reason || 'unknown'));
     }
-  }, [buildSeedPayload, applyPayloadLocal, forceWrite]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [buildSeedPayload, applyPayloadLocal, forceWrite, role, canWrite]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // First-time migration: if Firestore is empty and we're admin, push local data up.
   // Also handles "doc exists but contains empty arrays" — happens when a previous
