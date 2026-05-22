@@ -64,12 +64,18 @@ input, textarea, select { font-family: inherit; color: inherit; }
 
 /* ─── App scaffold ─── */
 .app {
-  display: grid;
-  grid-template-rows: 56px 1fr;
-  grid-template-columns: 1fr;
+  /* Was grid with rows 56px 1fr — that broke when the readonly-banner was
+     conditionally inserted between toolbar and chart-area for non-admin users,
+     pushing chart-area into an unmapped third row with 0 height. Flex column
+     handles a variable number of children correctly. */
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   background: var(--bg);
 }
+.app > .toolbar       { flex: 0 0 56px; }
+.app > .readonly-banner { flex: 0 0 auto; }
+.app > .chart-area    { flex: 1 1 auto; min-height: 0; }
 
 /* ─── Toolbar ─── */
 .toolbar {
