@@ -1528,3 +1528,137 @@ input, textarea, select { font-family: inherit; color: inherit; }
   justify-content: center;
   gap: 6px;
 }
+
+/* ─────────────────────────────────────────────────────────────────
+   MOBILE / TABLET RESPONSIVE STYLES
+   Two breakpoints:
+     ≤ 900px = tablet & landscape phone   (compact toolbar)
+     ≤ 600px = portrait phone             (collapsed toolbar + bottom-sheet sidebar)
+   ───────────────────────────────────────────────────────────────── */
+
+/* Canvas: never let the browser hijack touch gestures — we handle pan + pinch */
+.canvas { touch-action: none; }
+.canvas .node, .canvas .sub-branch-card, .canvas .group-card { touch-action: none; }
+
+/* ── Tablet & small laptop (≤ 900px) ─────────────────────────── */
+@media (max-width: 900px) {
+  .app > .toolbar { flex: 0 0 auto; }
+  .toolbar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 8px 12px;
+    min-height: 56px;
+  }
+  .brand { padding-right: 10px; margin-right: 0; }
+  .brand-name { max-width: 140px; font-size: 14px; }
+  .brand-sub { display: none; }
+  .tb-search { flex: 1 1 100%; order: 99; }
+  .view-tab-group { order: 1; }
+  .tb-spacer { display: none; }
+  .tb-btn span:not(.tb-btn-icon-only) { /* keep labels for now */ }
+  .modal { width: 92vw !important; }
+}
+
+/* ── Phone (≤ 600px) ─────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .toolbar {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+  .brand { gap: 8px; padding-right: 8px; }
+  .brand-logo { width: 32px; height: 32px; border-radius: 8px; }
+  .brand-name { max-width: 110px; font-size: 13px; }
+
+  /* Hide text labels on toolbar buttons — keep just the icons */
+  .tb-btn { padding: 0 9px; gap: 0; }
+  .tb-btn > span:not(.lv-badge) { display: none; }
+  .tb-btn > svg { margin: 0; }
+  /* Re-show approval count chip inside the "จัดการผู้ใช้" menu item */
+  .user-menu-item > span { display: inline-flex !important; }
+
+  .view-tab { padding: 6px 8px; font-size: 11px; }
+  .view-tab svg { width: 12px; height: 12px; }
+  .view-tab span:not(.lv-badge) { display: none; }
+
+  /* Zoom control: shrink and hide the percentage display */
+  .tb-zoom { padding: 1px; }
+  .tb-zoom button { width: 26px; height: 28px; }
+  .tb-zoom .val { display: none; }
+
+  .user-menu-trigger .user-info { display: none; }
+
+  /* Modals: take the full screen with safe-area padding */
+  .modal-bg { padding: 0 !important; }
+  .modal {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Sidebar: slide up as a bottom sheet instead of a right rail */
+  .sidebar {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100% !important;
+    height: 80vh;
+    max-height: 80vh;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.18);
+    animation: sidebar-slide-up .22s ease-out;
+  }
+  @keyframes sidebar-slide-up {
+    from { transform: translateY(100%); }
+    to   { transform: translateY(0); }
+  }
+  /* Grab-handle bar at the top of the bottom-sheet sidebar */
+  .sidebar::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 40px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--ink-3);
+    opacity: 0.35;
+    pointer-events: none;
+  }
+  .sb-header { padding-top: 24px; }
+  .sb-avatar { width: 56px; height: 56px; font-size: 18px; }
+  .sb-name { font-size: 16px; }
+
+  /* Tweaks panel: push off-screen below toolbar */
+  .tweaks-panel, .twk-panel {
+    width: 100vw !important;
+    max-width: 100vw !important;
+  }
+
+  /* Toast: bottom-center with extra clearance from the bottom-sheet handle */
+  .toast {
+    left: 12px !important;
+    right: 12px !important;
+    bottom: 16px !important;
+    max-width: none !important;
+  }
+
+  /* Card touch targets — slightly bigger hit areas on phones */
+  .node { touch-action: none; }
+
+  /* Login screen: less padding so the card breathes on small viewports */
+  .login-card { width: calc(100vw - 32px); max-width: 380px; padding: 28px 22px; }
+}
+
+/* ── Extra-tiny phone (≤ 380px) ──────────────────────────────── */
+@media (max-width: 380px) {
+  .brand-name { max-width: 80px; font-size: 12px; }
+  .view-tab { padding: 5px 6px; }
+  .tb-btn { padding: 0 6px; }
+}

@@ -364,6 +364,84 @@ function Canvas({
     });
   };
 
+  // ── Pinch-to-zoom + 2-finger pan for touch devices ──────────────────────
+  // Track active pointers; when ≥2 are down, treat them as a pinch gesture.
+  // This sits on top of the canvas as its own listener stack so it doesn't
+  // race with the single-pointer pan-drag handlers above.
+  const touchPointersRef = React.useRef(new Map()); // pointerId → {x, y}
+  const pinchStateRef = React.useRef(null); // { startDist, startMid, startT }
+  // Mirror the latest transform so the gesture handlers (which mount once)
+  // can read the current value without re-creating listeners on every render.
+  const transformRef = React.useRef(transform);
+  React.useEffect(() => { transformRef.current = transform; }, [transform]);
+  React.useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const pointers = touchPointersRef.current;
+
+    const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+    const midpoint = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+    const onDown = (e) => {
+      if (e.pointerType !== 'touch') return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size === 2) {
+        // Pinch starts — snapshot the initial geometry. setTransform inside
+        // onMove computes everything relative to this snapshot so it stays
+        // stable even as the pointers move.
+        const [a, b] = Array.from(pointers.values());
+        const rect = el.getBoundingClientRect();
+        pinchStateRef.current = {
+          startDist: distance(a, b),
+          startMid: { x: midpoint(a, b).x - rect.left, y: midpoint(a, b).y - rect.top },
+          startT: { ...transformRef.current },
+        };
+      }
+    };
+
+    const onMove = (e) => {
+      if (e.pointerType !== 'touch') return;
+      if (!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointers.size >= 2 && pinchStateRef.current) {
+        const [a, b] = Array.from(pointers.values()).slice(0, 2);
+        const dist = distance(a, b);
+        const rect = el.getBoundingClientRect();
+        const mid = { x: midpoint(a, b).x - rect.left, y: midpoint(a, b).y - rect.top };
+        const { startDist, startMid, startT } = pinchStateRef.current;
+        if (startDist > 4) {
+          const ratio = dist / startDist;
+          const k = Math.max(0.05, Math.min(3.0, startT.k * ratio));
+          // Zoom around the original midpoint, then add pan from midpoint drift.
+          const newX = startT.x + (startMid.x - startT.x) * (1 - k / startT.k) + (mid.x - startMid.x);
+          const newY = startT.y + (startMid.y - startT.y) * (1 - k / startT.k) + (mid.y - startMid.y);
+          setTransform({ k, x: newX, y: newY });
+          e.preventDefault();
+        }
+      }
+    };
+
+    const onUp = (e) => {
+      if (e.pointerType !== 'touch') return;
+      pointers.delete(e.pointerId);
+      if (pointers.size < 2) pinchStateRef.current = null;
+    };
+
+    // Use capture so we see touch events before the single-pointer pan
+    // handlers swallow them.
+    el.addEventListener('pointerdown', onDown, { capture: true });
+    el.addEventListener('pointermove', onMove, { capture: true });
+    el.addEventListener('pointerup', onUp, { capture: true });
+    el.addEventListener('pointercancel', onUp, { capture: true });
+    return () => {
+      el.removeEventListener('pointerdown', onDown, { capture: true });
+      el.removeEventListener('pointermove', onMove, { capture: true });
+      el.removeEventListener('pointerup', onUp, { capture: true });
+      el.removeEventListener('pointercancel', onUp, { capture: true });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Expose zoom controls + notify parent
   React.useEffect(() => {
     window.__chartTransform = transform;
