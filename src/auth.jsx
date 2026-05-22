@@ -15,7 +15,9 @@ function useAuth() {
 // ── AuthProvider — listens to Firebase auth state, syncs role from Firestore ───
 function AuthProvider({ children }) {
   const [user, setUser]       = React.useState(null);
-  const [role, setRole]       = React.useState('viewer');
+  // Default to 'pending' so unknown / new users are blocked by AuthGate until
+  // their role is loaded from Firestore (or an admin approves them).
+  const [role, setRole]       = React.useState('pending');
   const [loading, setLoading] = React.useState(true);
   const [error, setError]     = React.useState(null);
 
@@ -34,7 +36,7 @@ function AuthProvider({ children }) {
 
       if (!u) {
         setUser(null);
-        setRole('viewer');
+        setRole('pending');
         setLoading(false);
         return;
       }
@@ -46,11 +48,14 @@ function AuthProvider({ children }) {
         const isAdminEmail = u.email && adminList.includes(u.email.toLowerCase());
 
         if (!snap.exists) {
-          // First sign-in — create user doc; bootstrap admin role if email matches
+          // First sign-in — create user doc.
+          // Admins-by-email bootstrap straight to 'admin'. Everyone else lands
+          // in 'pending' and must be approved by an admin before they can
+          // read the org chart (AuthGate blocks them until role changes).
           await userRef.set({
             email: u.email,
             displayName: u.displayName || (u.email || '').split('@')[0],
-            role: isAdminEmail ? 'admin' : 'viewer',
+            role: isAdminEmail ? 'admin' : 'pending',
             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
           });
         } else if (isAdminEmail && snap.data().role !== 'admin') {
@@ -58,10 +63,11 @@ function AuthProvider({ children }) {
           await userRef.update({ role: 'admin' });
         }
 
-        // Subscribe to live role changes (so admin promotion is reflected instantly)
+        // Subscribe to live role changes — so admin approval / promotion is
+        // reflected instantly without the user having to refresh.
         roleUnsub = userRef.onSnapshot((d) => {
           if (d.exists) {
-            const r = d.data().role || 'viewer';
+            const r = d.data().role || 'pending';
             setRole(r);
           }
         });
@@ -76,7 +82,7 @@ function AuthProvider({ children }) {
         console.error('[auth] user-doc bootstrap failed:', err);
         setError(err.message || String(err));
         setUser({ uid: u.uid, email: u.email });
-        setRole('viewer');
+        setRole('pending');
       } finally {
         setLoading(false);
       }
@@ -220,9 +226,57 @@ function LoginScreen() {
   );
 }
 
-// ── AuthGate — wraps app; blocks until login complete ───────────────────────
+// ── Pending-approval screen (shown to signed-in users with role === 'pending') ─
+function PendingApprovalScreen({ user }) {
+  return (
+    <div className="splash">
+      <div style={{ textAlign: 'center', maxWidth: 420, padding: 24 }}>
+        <div style={{
+          width: 72, height: 72, margin: '0 auto 16px',
+          borderRadius: '50%',
+          background: 'linear-gradient(135deg, #FFC857, #FF8A3D)',
+          display: 'grid', placeItems: 'center',
+          boxShadow: '0 6px 16px rgba(255,138,61,0.35)',
+        }}>
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="9" stroke="#fff" strokeWidth="2" />
+            <path d="M12 7v5l3 2" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>
+          รอการอนุมัติจาก Admin
+        </div>
+        <div style={{ fontSize: 13.5, color: '#475569', lineHeight: 1.55, marginBottom: 18 }}>
+          บัญชีของคุณ <b style={{ color: '#0F172A' }}>{user?.email}</b> ลงทะเบียนเรียบร้อยแล้ว
+          <br />
+          กรุณาติดต่อ Admin เพื่อขอสิทธิ์เข้าใช้งาน Org Chart
+          <br />
+          เมื่อ Admin อนุมัติแล้ว หน้านี้จะเปลี่ยนให้อัตโนมัติ
+        </div>
+        <button
+          onClick={() => window.fbAuth && window.fbAuth.signOut()}
+          style={{
+            padding: '10px 22px',
+            fontSize: 13,
+            fontWeight: 700,
+            color: '#475569',
+            background: '#F1F5F9',
+            border: '1.5px solid #CBD5E1',
+            borderRadius: 10,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+          }}
+        >
+          ออกจากระบบ
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── AuthGate — wraps app; blocks until login + approval complete ────────────
 function AuthGate({ children }) {
-  const { user, loading, error } = useAuth();
+  const { user, role, loading, error } = useAuth();
   if (loading) return <Splash text="กำลังตรวจสอบสิทธิ์..." />;
   if (error && !user) {
     return (
@@ -235,6 +289,8 @@ function AuthGate({ children }) {
     );
   }
   if (!user) return <LoginScreen />;
+  // Signed in but waiting for admin approval — block access to the chart.
+  if (role === 'pending') return <PendingApprovalScreen user={user} />;
   return children;
 }
 
@@ -242,6 +298,7 @@ function AuthGate({ children }) {
 function UserMenu({ onOpenUserMgmt }) {
   const { user, role } = useAuth();
   const [open, setOpen] = React.useState(false);
+  const [pendingCount, setPendingCount] = React.useState(0);
   const ref = React.useRef(null);
 
   React.useEffect(() => {
@@ -252,14 +309,30 @@ function UserMenu({ onOpenUserMgmt }) {
     return () => document.removeEventListener('mousedown', close);
   }, []);
 
+  // Admin-only: live-subscribe to users with role=pending so the toolbar can
+  // show a notification badge prompting the admin to review approvals.
+  React.useEffect(() => {
+    if (role !== 'admin' || !window.fbDb) {
+      setPendingCount(0);
+      return;
+    }
+    const unsub = window.fbDb.collection('users')
+      .where('role', '==', 'pending')
+      .onSnapshot(
+        (snap) => setPendingCount(snap.size),
+        (e) => console.warn('[user-menu] pending count subscribe failed:', e.message),
+      );
+    return unsub;
+  }, [role]);
+
   if (!user) return null;
 
-  const roleColors = { admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
-  const roleLabels = { admin: 'Admin',   editor: 'Editor',  viewer: 'Viewer'  };
+  const roleColors = { pending: '#FFC857', admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
+  const roleLabels = { pending: 'รออนุมัติ', admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
   const initial = ((user.email || 'U')[0] || 'U').toUpperCase();
 
   return (
-    <div className="user-menu" ref={ref}>
+    <div className="user-menu" ref={ref} style={{ position: 'relative' }}>
       <button className="user-menu-trigger" onClick={() => setOpen(!open)} title={user.email}>
         <div className="user-avatar" style={{ background: roleColors[role] || '#FF6B47' }}>
           {initial}
@@ -273,6 +346,32 @@ function UserMenu({ onOpenUserMgmt }) {
         <svg width="10" height="10" viewBox="0 0 16 16" fill="none" style={{ marginLeft: 2 }}>
           <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
+        {/* Pending-approval notification badge (admin only). */}
+        {pendingCount > 0 && (
+          <span
+            title={`มีผู้ใช้ ${pendingCount} คนรออนุมัติ`}
+            style={{
+              position: 'absolute',
+              top: -4,
+              right: -4,
+              minWidth: 18,
+              height: 18,
+              padding: '0 5px',
+              boxSizing: 'border-box',
+              borderRadius: 9,
+              background: '#E53935',
+              color: '#fff',
+              fontSize: 10,
+              fontWeight: 800,
+              display: 'grid',
+              placeItems: 'center',
+              boxShadow: '0 0 0 2px #fff',
+              pointerEvents: 'none',
+            }}
+          >
+            {pendingCount > 9 ? '9+' : pendingCount}
+          </span>
+        )}
       </button>
 
       {open && (
@@ -290,7 +389,19 @@ function UserMenu({ onOpenUserMgmt }) {
                 <circle cx="8" cy="5" r="2.5" stroke="currentColor" strokeWidth="1.4" />
                 <path d="M2.5 14c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
               </svg>
-              จัดการผู้ใช้
+              <span style={{ flex: 1, textAlign: 'left' }}>จัดการผู้ใช้</span>
+              {pendingCount > 0 && (
+                <span style={{
+                  padding: '1px 7px',
+                  borderRadius: 8,
+                  background: '#E53935',
+                  color: '#fff',
+                  fontSize: 10,
+                  fontWeight: 800,
+                }}>
+                  {pendingCount} รออนุมัติ
+                </span>
+              )}
             </button>
           )}
 
@@ -321,7 +432,8 @@ function UserManagementModal({ onClose }) {
         const arr = [];
         snap.forEach((doc) => arr.push({ uid: doc.id, ...doc.data() }));
         arr.sort((a, b) => {
-          const order = { admin: 0, editor: 1, viewer: 2 };
+          // Pending users sort to the top so admins notice them immediately.
+          const order = { pending: 0, admin: 1, editor: 2, viewer: 3 };
           return (order[a.role] ?? 9) - (order[b.role] ?? 9)
               || (a.email || '').localeCompare(b.email || '');
         });
@@ -345,7 +457,9 @@ function UserManagementModal({ onClose }) {
     }
   };
 
-  const roleColors = { admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
+  const roleColors = { pending: '#FFC857', admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
+  const roleLabels = { pending: 'รออนุมัติ', admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
+  const pendingCount = users.filter(u => u.role === 'pending').length;
   const filtered = users.filter(u =>
     !filter.trim() ||
     (u.email || '').toLowerCase().includes(filter.toLowerCase()) ||
@@ -357,7 +471,23 @@ function UserManagementModal({ onClose }) {
       <div className="modal" onClick={(e) => e.stopPropagation()}
            style={{ width: 580, maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
         <div className="modal-header">
-          <h3>จัดการผู้ใช้ <span style={{ color: 'var(--ink-3)', fontWeight: 500 }}>({users.length} คน)</span></h3>
+          <h3>
+            จัดการผู้ใช้ <span style={{ color: 'var(--ink-3)', fontWeight: 500 }}>({users.length} คน)</span>
+            {pendingCount > 0 && (
+              <span style={{
+                marginLeft: 10,
+                padding: '2px 9px',
+                borderRadius: 10,
+                fontSize: 11,
+                fontWeight: 700,
+                background: '#FFC857',
+                color: '#7C5300',
+                verticalAlign: 'middle',
+              }}>
+                รออนุมัติ {pendingCount}
+              </span>
+            )}
+          </h3>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
 
@@ -385,10 +515,12 @@ function UserManagementModal({ onClose }) {
           ) : (
             filtered.map((u) => {
               const isSelf = currentUser && u.uid === currentUser.uid;
+              const isPending = u.role === 'pending';
               return (
                 <div key={u.uid} style={{
                   display: 'flex', alignItems: 'center', gap: 12,
                   padding: '12px 16px', borderBottom: '1px solid var(--line)',
+                  background: isPending ? 'rgba(255,200,87,0.10)' : 'transparent',
                 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: '50%',
@@ -403,13 +535,48 @@ function UserManagementModal({ onClose }) {
                     <div style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {u.email}
                       {isSelf && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--ink-3)', fontStyle: 'italic' }}>(คุณ)</span>}
+                      {isPending && (
+                        <span style={{
+                          marginLeft: 8,
+                          padding: '1px 7px',
+                          borderRadius: 8,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          background: '#FFC857',
+                          color: '#7C5300',
+                        }}>
+                          รออนุมัติ
+                        </span>
+                      )}
                     </div>
                     {u.displayName && u.displayName !== u.email && (
                       <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{u.displayName}</div>
                     )}
                   </div>
+                  {/* For pending users, show a fast "อนุมัติเป็น Viewer" button
+                      alongside the regular role dropdown for finer control. */}
+                  {isPending && !isSelf && (
+                    <button
+                      onClick={() => changeRole(u.uid, 'viewer')}
+                      title="อนุมัติเป็น Viewer ทันที"
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        border: 'none',
+                        background: 'linear-gradient(135deg, #4FD1A5, #36B894)',
+                        color: '#fff',
+                        fontWeight: 700,
+                        fontSize: 12,
+                        cursor: 'pointer',
+                        fontFamily: 'inherit',
+                        boxShadow: '0 2px 6px rgba(54,184,148,0.35)',
+                      }}
+                    >
+                      อนุมัติ
+                    </button>
+                  )}
                   <select
-                    value={u.role || 'viewer'}
+                    value={u.role || 'pending'}
                     onChange={(e) => changeRole(u.uid, e.target.value)}
                     disabled={isSelf}
                     title={isSelf ? 'ไม่สามารถเปลี่ยนสิทธิ์ตัวเองได้' : ''}
@@ -423,6 +590,7 @@ function UserManagementModal({ onClose }) {
                       fontFamily: 'inherit',
                     }}
                   >
+                    <option value="pending">รออนุมัติ</option>
                     <option value="admin">Admin</option>
                     <option value="editor">Editor</option>
                     <option value="viewer">Viewer</option>
@@ -433,10 +601,11 @@ function UserManagementModal({ onClose }) {
           )}
         </div>
 
-        <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--ink-3)', borderTop: '1px solid var(--line)' }}>
-          <b>Admin</b> = แก้ทุกอย่าง + จัดการผู้ใช้ &nbsp; · &nbsp;
-          <b>Editor</b> = แก้ Org Chart ได้ &nbsp; · &nbsp;
-          <b>Viewer</b> = ดูอย่างเดียว
+        <div style={{ padding: '10px 16px', fontSize: 11, color: 'var(--ink-3)', borderTop: '1px solid var(--line)', lineHeight: 1.6 }}>
+          <b style={{ color: '#7C5300' }}>รออนุมัติ</b> = ยังเข้าใช้งานไม่ได้ &nbsp; · &nbsp;
+          <b style={{ color: '#5DADE2' }}>Viewer</b> = ดูอย่างเดียว &nbsp; · &nbsp;
+          <b style={{ color: '#FF8A3D' }}>Editor</b> = แก้ Org Chart ได้ &nbsp; · &nbsp;
+          <b style={{ color: '#E53935' }}>Admin</b> = แก้ทุกอย่าง + จัดการผู้ใช้
         </div>
       </div>
     </div>

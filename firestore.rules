@@ -6,6 +6,7 @@ rules_version = '2';
 //   - admin   = read/write everything; can manage user roles
 //   - editor  = read/write org data; cannot change roles
 //   - viewer  = read-only
+//   - pending = signed up but not yet approved by an admin — cannot read org data
 //   - guest   = (unauthenticated) — NO access
 //
 // Paste this entire file into:
@@ -31,22 +32,27 @@ service cloud.firestore {
       return isSignedIn() && (userRole() == 'admin' || userRole() == 'editor');
     }
 
+    // Approved = role exists and isn't 'pending'
+    function isApproved() {
+      return isSignedIn() && userRole() in ['admin', 'editor', 'viewer'];
+    }
+
     // ── users/{uid} — one doc per signed-in user with their role ─────
     match /users/{userId} {
       // Read: own doc or any admin
       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
 
       // Create: only on first sign-in (own uid, email matches auth token).
-      // We let the client choose the role — auth.jsx enforces:
-      //   - 'admin' only if email is in ADMIN_EMAILS whitelist
-      //   - 'viewer' for everyone else
+      // auth.jsx writes 'admin' for whitelisted emails, 'pending' for everyone
+      // else — the latter must be approved by an admin before they can read
+      // org data.
       allow create: if isSignedIn()
         && request.auth.uid == userId
         && request.resource.data.email == request.auth.token.email
-        && request.resource.data.role in ['admin', 'editor', 'viewer'];
+        && request.resource.data.role in ['admin', 'editor', 'viewer', 'pending'];
 
-      // Update: admin only (so viewers can't self-promote)
-      // EXCEPTION: own user may update their own displayName (but not role)
+      // Update: admin only (so viewers/pending users can't self-promote).
+      // EXCEPTION: own user may update their own displayName (but not role).
       allow update: if isAdmin()
         || (isSignedIn() && request.auth.uid == userId
             && request.resource.data.role == resource.data.role
@@ -57,8 +63,9 @@ service cloud.firestore {
     }
 
     // ── orgs/{orgId} — shared org chart data ────────────────────────
+    // Pending users are signed in but NOT approved → no read access.
     match /orgs/{orgId} {
-      allow read:  if isSignedIn();
+      allow read:  if isApproved();
       allow write: if canEdit();
     }
 
