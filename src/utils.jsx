@@ -41,6 +41,9 @@ function initials(name) {
 
 // Build map id → person, parent → children
 function buildTree(people) {
+  // Defensive: ensure we always work with an array (Firestore / localStorage
+  // can occasionally return null/undefined/object instead of an array).
+  if (!Array.isArray(people)) people = [];
   const byId = {};
   const childrenOf = {};
   for (const p of people) {

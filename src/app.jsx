@@ -49,19 +49,24 @@ function App() {
       const raw = localStorage.getItem(key);
       if (!raw) return fallback;
       const parsed = JSON.parse(raw);
+      // If we expect an array fallback, force an array result (defends against
+      // corrupted localStorage that stored null / an object).
+      if (Array.isArray(fallback) && !Array.isArray(parsed)) return fallback;
       return parsed;
     } catch (e) { return fallback; }
   };
+  // Helper: coerce arbitrary value to an array (used when applying remote state)
+  const asArr = (v) => Array.isArray(v) ? v : [];
   const SEED = window.SEED_DATA || {};
-  const [people, setPeople] = React.useState(() => loadSaved('orgPeople', SEED.people || []));
-  const [departments, setDepartments] = React.useState(() => loadSaved('orgDepartments', SEED.departments || []));
-  const [history, setHistory] = React.useState(() => loadSaved('orgHistory', SEED.history || []));
+  const [people, setPeople] = React.useState(() => asArr(loadSaved('orgPeople', SEED.people || [])));
+  const [departments, setDepartments] = React.useState(() => asArr(loadSaved('orgDepartments', SEED.departments || [])));
+  const [history, setHistory] = React.useState(() => asArr(loadSaved('orgHistory', SEED.history || [])));
   // Non-hierarchical "works with / coordinates with" links — bidirectional pairs
-  const [collaborations, setCollaborations] = React.useState(() => loadSaved('orgCollaborations', SEED.collaborations || []));
+  const [collaborations, setCollaborations] = React.useState(() => asArr(loadSaved('orgCollaborations', SEED.collaborations || [])));
   // Co-oversight: [{deptId, personId}] — extra management links for the dept overview
-  const [coOversight, setCoOversight] = React.useState(() => loadSaved('orgCoOversight', SEED.coOversight || []));
+  const [coOversight, setCoOversight] = React.useState(() => asArr(loadSaved('orgCoOversight', SEED.coOversight || [])));
   // Dept-to-dept oversight links: [{from, to}] — dashed edges in dept overview
-  const [deptLinks, setDeptLinks] = React.useState(() => loadSaved('orgDeptLinks', SEED.deptLinks || []));
+  const [deptLinks, setDeptLinks] = React.useState(() => asArr(loadSaved('orgDeptLinks', SEED.deptLinks || [])));
 
   // Persist on every change
   React.useEffect(() => {
@@ -121,14 +126,16 @@ function App() {
   }), [people, departments, collaborations, coOversight, deptLinks, orgName, logoUrl, history]);
 
   const applyRemote = React.useCallback((data) => {
-    if (data.people         !== undefined) setPeople(data.people);
-    if (data.departments    !== undefined) setDepartments(data.departments);
-    if (data.collaborations !== undefined) setCollaborations(data.collaborations);
-    if (data.coOversight    !== undefined) setCoOversight(data.coOversight);
-    if (data.deptLinks      !== undefined) setDeptLinks(data.deptLinks);
+    // Coerce array-typed fields so a malformed remote payload can't crash the
+    // app with "X is not iterable" later in render.
+    if (data.people         !== undefined) setPeople(asArr(data.people));
+    if (data.departments    !== undefined) setDepartments(asArr(data.departments));
+    if (data.collaborations !== undefined) setCollaborations(asArr(data.collaborations));
+    if (data.coOversight    !== undefined) setCoOversight(asArr(data.coOversight));
+    if (data.deptLinks      !== undefined) setDeptLinks(asArr(data.deptLinks));
+    if (data.history        !== undefined) setHistory(asArr(data.history));
     if (data.orgName        !== undefined) setOrgName(data.orgName);
     if (data.logoUrl        !== undefined) setLogoUrl(data.logoUrl);
-    if (data.history        !== undefined) setHistory(data.history);
   }, []);
 
   const { syncStatus, didFirstLoad, bootstrap } = (typeof useFirestoreSync === 'function')
