@@ -139,7 +139,36 @@ function LoginScreen() {
     setSubmitting(true);
     try {
       if (mode === 'signup') {
-        await window.fbAuth.createUserWithEmailAndPassword(email.trim(), password);
+        try {
+          await window.fbAuth.createUserWithEmailAndPassword(email.trim(), password);
+        } catch (signupEx) {
+          // Special case: the email already has a Firebase Auth account but
+          // the corresponding Firestore user-doc may have been deleted by an
+          // admin. In that case the user is effectively "deleted" from the
+          // app's perspective and wants to re-register. We can't recreate
+          // the auth account (Firebase rejects duplicate emails), but we CAN
+          // sign them in with the same password — onAuthStateChanged in
+          // AuthProvider will detect the missing doc and recreate it as
+          // role='pending', putting them back in the approval queue.
+          if (signupEx.code === 'auth/email-already-in-use') {
+            try {
+              await window.fbAuth.signInWithEmailAndPassword(email.trim(), password);
+              // Success — AuthGate will swap to the pending-approval screen
+              // automatically as soon as the new user-doc is created.
+            } catch (signinEx) {
+              // Wrong password — the auth account exists but they don't
+              // remember the password they originally used. Steer them to
+              // reset.
+              if (signinEx.code === 'auth/wrong-password' || signinEx.code === 'auth/invalid-credential') {
+                setErr('อีเมลนี้เคยใช้สมัครแล้ว และรหัสผ่านที่กรอกไม่ตรง — กด "ลืมรหัสผ่าน" เพื่อรีเซ็ต');
+              } else {
+                throw signinEx;
+              }
+            }
+          } else {
+            throw signupEx;
+          }
+        }
       } else if (mode === 'reset') {
         await window.fbAuth.sendPasswordResetEmail(email.trim());
         setInfo('ส่งลิงก์รีเซ็ตรหัสผ่านไปทาง email แล้ว — กดลิงก์ใน email');
@@ -218,7 +247,11 @@ function LoginScreen() {
 
         {mode === 'signup' && (
           <div className="login-note">
-            หลังสมัคร — บัญชีจะเป็น <b>Viewer</b> (ดูอย่างเดียว) จนกว่า Admin จะให้สิทธิ์เพิ่ม
+            หลังสมัคร — บัญชีจะเป็น <b style={{ color: '#B45309' }}>รออนุมัติ</b> จนกว่า Admin จะอนุมัติให้เข้าใช้งาน
+            <br />
+            <span style={{ fontSize: 10.5, opacity: 0.85 }}>
+              ถ้าเคยสมัครแล้วถูกลบ — กรอก email + password เดิม กดสมัครได้เลย ระบบจะส่งคุณเข้าคิวอนุมัติใหม่
+            </span>
           </div>
         )}
       </div>
