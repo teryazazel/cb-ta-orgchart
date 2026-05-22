@@ -138,9 +138,54 @@ function App() {
     if (data.logoUrl        !== undefined) setLogoUrl(data.logoUrl);
   }, []);
 
-  const { syncStatus, didFirstLoad, bootstrap } = (typeof useFirestoreSync === 'function')
+  const { syncStatus, didFirstLoad, bootstrap, forceWrite } = (typeof useFirestoreSync === 'function')
     ? useFirestoreSync(syncedState, applyRemote, canWrite, user?.uid)
-    : { syncStatus: 'no-doc', didFirstLoad: true, bootstrap: async () => ({ didBootstrap: false }) };
+    : { syncStatus: 'no-doc', didFirstLoad: true, bootstrap: async () => ({ didBootstrap: false }), forceWrite: async () => ({ ok: false }) };
+
+  // Build a payload from the SEED constant (used by both auto-restore and the
+  // manual "Restore from seed" admin button).
+  const buildSeedPayload = React.useCallback(() => ({
+    people:         asArr(SEED.people),
+    departments:    asArr(SEED.departments),
+    collaborations: asArr(SEED.collaborations),
+    coOversight:    asArr(SEED.coOversight),
+    deptLinks:      asArr(SEED.deptLinks),
+    history:        asArr(SEED.history),
+    orgName:        SEED.name || 'CB TA TRADING',
+    logoUrl:        SEED.logo || '',
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Apply a payload to all local state slots (used after a successful
+  // restore-from-seed write to Firestore — so the UI updates immediately
+  // without waiting for the onSnapshot round-trip).
+  const applyPayloadLocal = React.useCallback((payload) => {
+    setPeople(asArr(payload.people));
+    setDepartments(asArr(payload.departments));
+    setCollaborations(asArr(payload.collaborations));
+    setCoOversight(asArr(payload.coOversight));
+    setDeptLinks(asArr(payload.deptLinks));
+    setHistory(asArr(payload.history));
+    if (payload.orgName) setOrgName(payload.orgName);
+    if (payload.logoUrl) setLogoUrl(payload.logoUrl);
+  }, []);
+
+  // Manual "Restore from seed" — admin can click this if auto-recovery missed
+  const handleRestoreFromSeed = React.useCallback(async () => {
+    const seedPeople = Array.isArray(SEED.people) ? SEED.people : [];
+    if (seedPeople.length === 0) {
+      flashToast('ไม่พบ seed data');
+      return;
+    }
+    if (!confirm(`คืนค่าข้อมูลจาก seed (${seedPeople.length} คน) ทับข้อมูลปัจจุบัน?`)) return;
+    const payload = buildSeedPayload();
+    const r = await forceWrite(payload);
+    if (r.ok) {
+      applyPayloadLocal(payload);
+      flashToast(`คืนค่าจาก seed สำเร็จ (${seedPeople.length} คน)`);
+    } else {
+      flashToast('คืนค่าไม่สำเร็จ: ' + (r.reason || 'unknown'));
+    }
+  }, [buildSeedPayload, applyPayloadLocal, forceWrite]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // First-time migration: if Firestore is empty and we're admin, push local data up.
   // Also handles "doc exists but contains empty arrays" — happens when a previous
@@ -151,6 +196,11 @@ function App() {
     if (syncStatus === 'connecting') return;
 
     const seedPeople = Array.isArray(SEED.people) ? SEED.people : [];
+    console.log('[bootstrap-check]', {
+      didFirstLoad, syncStatus, role,
+      seedPeopleLen: seedPeople.length,
+      peopleLen: people.length,
+    });
     if (seedPeople.length === 0) return; // no seed → nothing to restore
 
     // Case A: doc doesn't exist yet → run normal bootstrap (push current state up)
@@ -165,21 +215,22 @@ function App() {
     }
 
     // Case B: doc exists but people array is empty → restore from seed.
-    // This recovers from a previous broken push that wiped out the org chart.
+    // Use forceWrite (direct Firestore set) instead of relying on the debounced
+    // push effect, which can race with isApplyingRemoteRef and skip the write.
     if ((syncStatus === 'synced' || syncStatus === 'offline') && people.length === 0) {
       bootstrapDoneRef.current = true;
       console.log('%c[bootstrap] Restoring from seed (remote was empty)', 'color:#FF6B47;font-weight:bold');
-      // Hydrate local state from SEED. The push-to-Firestore effect in
-      // useFirestoreSync picks these up automatically once committed.
-      setPeople(asArr(SEED.people));
-      setDepartments(asArr(SEED.departments));
-      setCollaborations(asArr(SEED.collaborations));
-      setCoOversight(asArr(SEED.coOversight));
-      setDeptLinks(asArr(SEED.deptLinks));
-      setHistory(asArr(SEED.history));
-      if (SEED.name) setOrgName(SEED.name);
-      if (SEED.logo) setLogoUrl(SEED.logo);
-      flashToast('คืนค่าข้อมูลจาก seed — กำลังซิงก์ขึ้น Firestore');
+      const payload = buildSeedPayload();
+      forceWrite(payload).then((r) => {
+        if (r.ok) {
+          applyPayloadLocal(payload);
+          flashToast(`คืนค่าจาก seed (${payload.people.length} คน) ซิงก์ขึ้น Firestore แล้ว`);
+        } else {
+          console.error('[bootstrap] forceWrite failed', r);
+          flashToast('คืนค่าจาก seed ไม่สำเร็จ: ' + (r.reason || ''));
+          bootstrapDoneRef.current = false; // allow retry
+        }
+      });
     }
   }, [didFirstLoad, syncStatus, role, people.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -882,6 +933,7 @@ function App() {
         canWrite={canWrite}
         syncStatus={syncStatus}
         onOpenUserMgmt={() => setShowUserMgmt(true)}
+        onRestoreFromSeed={role === 'admin' ? handleRestoreFromSeed : null}
       />
 
       {!canWrite && (

@@ -134,7 +134,28 @@ function useFirestoreSync(syncedState, applyRemote, canWrite, currentUserId) {
     }
   }, [docRef, stateJson, currentUserId]);
 
-  return { syncStatus, didFirstLoad, bootstrap };
+  // ── Force-write a payload (used to restore from seed when remote was wiped) ──
+  // Bypasses the snap.exists check and the debounced push effect — writes
+  // immediately so we can recover from a Firestore doc full of empty arrays.
+  const forceWrite = React.useCallback(async (payload) => {
+    if (!docRef) return { ok: false, reason: 'no-firebase' };
+    try {
+      const data = { ...payload };
+      data.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
+      data.updatedBy = currentUserId || null;
+      data.restoredFromSeedAt = firebase.firestore.FieldValue.serverTimestamp();
+      await docRef.set(data, { merge: true });
+      // Update the sync ref so the push effect doesn't echo this back
+      lastSyncedJsonRef.current = JSON.stringify(payload);
+      console.log('%c[sync] FORCE-WROTE seed data to Firestore', 'color:#4FD1A5;font-weight:bold');
+      return { ok: true };
+    } catch (e) {
+      console.error('[sync] forceWrite failed:', e);
+      return { ok: false, reason: e.message };
+    }
+  }, [docRef, currentUserId]);
+
+  return { syncStatus, didFirstLoad, bootstrap, forceWrite };
 }
 
 window.useFirestoreSync = useFirestoreSync;

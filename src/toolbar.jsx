@@ -7,7 +7,7 @@ function Toolbar({
   totalPeople, totalDepts,
   orgName, onOrgNameChange, logoUrl, onLogoUpload,
   viewMode, onViewModeChange,
-  canWrite = true, syncStatus, onOpenUserMgmt,
+  canWrite = true, syncStatus, onOpenUserMgmt, onRestoreFromSeed,
 }) {
   const [searchFocus, setSearchFocus] = React.useState(false);
   const fileRef = React.useRef(null);
@@ -136,6 +136,21 @@ function Toolbar({
       </div>
 
       <div className="tb-spacer" />
+
+      {typeof onRestoreFromSeed === 'function' && (
+        <button
+          className="tb-btn"
+          onClick={onRestoreFromSeed}
+          title="คืนค่าข้อมูลจาก seed (เฉพาะ Admin)"
+          style={{ color: '#FF6B47' }}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M2.5 8a5.5 5.5 0 1 1 1.6 3.9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            <path d="M2 6.5V3M2 6.5h3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+          คืนค่า seed
+        </button>
+      )}
 
       <button className="tb-btn" onClick={onOpenHistory} title="ประวัติการเปลี่ยนแปลง">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 4v4l2.5 1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /><circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" /></svg>
