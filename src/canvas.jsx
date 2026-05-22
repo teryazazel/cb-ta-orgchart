@@ -326,14 +326,33 @@ function Canvas({
       return;
     }
 
-    // Plain click on empty canvas: clear multi-select (if any), then pan
+    // Plain click on empty canvas: clear multi-select (if any), then pan.
+    // On touch devices, bail out immediately if a second finger is already
+    // down — let the pinch handler own the gesture instead.
+    if (e.pointerType === 'touch' && touchPointersRef.current.size >= 2) return;
     if (multiSelected.size > 0) setMultiSelected(new Set());
 
     setPanning(true);
     const startX = e.clientX, startY = e.clientY;
     const { x, y, k } = transform;
+    let panStartX = startX, panStartY = startY;
+    let panOriginX = x, panOriginY = y;
     const move = (ev) => {
-      setTransform({ x: x + (ev.clientX - startX), y: y + (ev.clientY - startY), k });
+      // If a second finger landed, abort the single-pointer pan — pinch
+      // takes over. We also re-anchor the pan baseline so that if the user
+      // lifts the second finger and continues with one, the next move
+      // doesn't snap back.
+      if (touchPointersRef.current.size >= 2) {
+        const curT = transformRef.current;
+        panStartX = ev.clientX; panStartY = ev.clientY;
+        panOriginX = curT.x;    panOriginY = curT.y;
+        return;
+      }
+      setTransform({
+        x: panOriginX + (ev.clientX - panStartX),
+        y: panOriginY + (ev.clientY - panStartY),
+        k: transformRef.current.k,
+      });
     };
     const up = () => {
       setPanning(false);
