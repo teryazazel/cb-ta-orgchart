@@ -50,13 +50,24 @@ function App() {
       if (!raw) return fallback;
       const parsed = JSON.parse(raw);
       // If we expect an array fallback, force an array result (defends against
-      // corrupted localStorage that stored null / an object).
-      if (Array.isArray(fallback) && !Array.isArray(parsed)) return fallback;
+      // corrupted localStorage that stored null / an object / the wrapped
+      // {value:[...]} shape PowerShell-ConvertTo-Json produces).
+      if (Array.isArray(fallback)) {
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.value)) return parsed.value;
+        return fallback;
+      }
       return parsed;
     } catch (e) { return fallback; }
   };
-  // Helper: coerce arbitrary value to an array (used when applying remote state)
-  const asArr = (v) => Array.isArray(v) ? v : [];
+  // Helper: coerce arbitrary value to an array (used when applying remote state).
+  // Also unwraps PowerShell-ConvertTo-Json's {value:[...], Count:N} shape that
+  // a previous bake/migration step may have written into Firestore.
+  const asArr = (v) => {
+    if (Array.isArray(v)) return v;
+    if (v && typeof v === 'object' && Array.isArray(v.value)) return v.value;
+    return [];
+  };
   const SEED = window.SEED_DATA || {};
   const [people, setPeople] = React.useState(() => asArr(loadSaved('orgPeople', SEED.people || [])));
   const [departments, setDepartments] = React.useState(() => asArr(loadSaved('orgDepartments', SEED.departments || [])));
