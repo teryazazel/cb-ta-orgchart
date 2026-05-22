@@ -6,7 +6,10 @@
 $ErrorActionPreference = 'Stop'
 
 $path = (Resolve-Path (Join-Path $PSScriptRoot '..\src\data.js')).Path
-$txt = Get-Content -Raw $path
+# IMPORTANT: read as UTF-8 explicitly. PowerShell 5.1's Get-Content -Raw
+# defaults to ANSI (Windows-1252), which corrupts the Thai characters in
+# the SEED data on round-trip. Use .NET's File.ReadAllText with UTF-8.
+$txt = [System.IO.File]::ReadAllText($path, [System.Text.UTF8Encoding]::new($false))
 
 $marker = 'window.SEED_DATA = '
 $i = $txt.IndexOf($marker)
