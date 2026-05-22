@@ -263,6 +263,42 @@ function App() {
     }
   }, [didFirstLoad, syncStatus, role, people.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Auto-heal: detect broken logo data URL and silently restore from SEED ─
+  // Older buggy versions pushed a mojibake-corrupted base64 string up to
+  // Firestore. Every fresh load pulls that back down and shows alt text in
+  // place of the logo. Catch this by trying to load the URL in an off-DOM
+  // Image; if it errors and we're admin with a known-good SEED.logo, push
+  // the clean SEED back up to Firestore automatically.
+  const autoHealLogoRef = React.useRef(false);
+  React.useEffect(() => {
+    if (autoHealLogoRef.current) return;
+    if (role !== 'admin' || !canWrite) return;
+    if (!didFirstLoad || syncStatus === 'connecting') return;
+    if (!logoUrl || !logoUrl.startsWith('data:')) return;
+    if (!SEED.logo || SEED.logo === logoUrl) return; // already clean
+
+    const probe = new Image();
+    let cancelled = false;
+    probe.onload = () => { /* logo is fine, leave it alone */ };
+    probe.onerror = () => {
+      if (cancelled || autoHealLogoRef.current) return;
+      autoHealLogoRef.current = true;
+      console.warn('%c[auto-heal] logo failed to load — restoring full SEED to Firestore', 'color:#FF6B47;font-weight:bold');
+      const payload = buildSeedPayload();
+      forceWrite(payload).then((r) => {
+        if (r.ok) {
+          applyPayloadLocal(payload);
+          flashToast('โลโก้เสีย — คืนค่าจาก seed อัตโนมัติแล้ว');
+        } else {
+          console.error('[auto-heal] forceWrite failed:', r);
+          autoHealLogoRef.current = false; // allow retry on next change
+        }
+      });
+    };
+    probe.src = logoUrl;
+    return () => { cancelled = true; };
+  }, [logoUrl, role, canWrite, didFirstLoad, syncStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [selectedId, setSelectedId] = React.useState(null);
   const [searchQ, setSearchQ] = React.useState('');
   // Live zoom level (mirrored from whichever canvas is mounted, used for toolbar display)
@@ -838,7 +874,10 @@ function App() {
     const usableW = rect.width - pad * 2;
     const usableH = rect.height - pad * 2;
     const k = Math.min(usableW / w, usableH / h, 1.1);
-    const kFinal = Math.max(0.32, k);
+    // Lower floor to 0.1: SEED.customPos has cards spanning ~15k pixels wide,
+    // which the previous 0.32 floor could not fit on screen — cards landed
+    // off-edge and the chart appeared empty.
+    const kFinal = Math.max(0.1, k);
     const centerX = w * kFinal < usableW ? (usableW - w * kFinal) / 2 : 0;
     const centerY = h * kFinal < usableH ? (usableH - h * kFinal) / 2 : 0;
     window.__chartSetTransform({
