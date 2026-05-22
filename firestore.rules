@@ -6,7 +6,8 @@ rules_version = '2';
 //   - admin   = read/write everything; can manage user roles
 //   - editor  = read/write org data; cannot change roles
 //   - viewer  = read-only
-//   - pending = signed up but not yet approved by an admin — cannot read org data
+//   - (unapproved) = signed up but approved=false on their user doc — blocked from
+//                    reading org data until an admin flips approved=true
 //   - guest   = (unauthenticated) — NO access
 //
 // Paste this entire file into:
@@ -20,21 +21,25 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
     function userRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+      return userDoc().role;
+    }
+
+    function isApproved() {
+      // Legacy docs (created before the approved flag) are treated as approved.
+      return isSignedIn() && userDoc().get('approved', true) == true;
     }
 
     function isAdmin() {
-      return isSignedIn() && userRole() == 'admin';
+      return isSignedIn() && userRole() == 'admin' && isApproved();
     }
 
     function canEdit() {
-      return isSignedIn() && (userRole() == 'admin' || userRole() == 'editor');
-    }
-
-    // Approved = role exists and isn't 'pending'
-    function isApproved() {
-      return isSignedIn() && userRole() in ['admin', 'editor', 'viewer'];
+      return isSignedIn() && isApproved() && (userRole() == 'admin' || userRole() == 'editor');
     }
 
     // ── users/{uid} — one doc per signed-in user with their role ─────
@@ -43,27 +48,29 @@ service cloud.firestore {
       allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
 
       // Create: only on first sign-in (own uid, email matches auth token).
-      // auth.jsx writes 'admin' for whitelisted emails, 'pending' for everyone
-      // else — the latter must be approved by an admin before they can read
-      // org data.
+      // auth.jsx writes 'admin' (+approved:true) for whitelisted emails, and
+      // 'viewer' (+approved:false) for everyone else. The latter must be
+      // approved by an admin before they can read org data.
       allow create: if isSignedIn()
         && request.auth.uid == userId
         && request.resource.data.email == request.auth.token.email
-        && request.resource.data.role in ['admin', 'editor', 'viewer', 'pending'];
+        && request.resource.data.role in ['admin', 'editor', 'viewer'];
 
-      // Update: admin only (so viewers/pending users can't self-promote).
-      // EXCEPTION: own user may update their own displayName (but not role).
+      // Update: admin only (so viewers can't self-promote OR self-approve).
+      // EXCEPTION: own user may update their own displayName, but neither
+      // their role nor the approved flag.
       allow update: if isAdmin()
         || (isSignedIn() && request.auth.uid == userId
             && request.resource.data.role == resource.data.role
-            && request.resource.data.email == resource.data.email);
+            && request.resource.data.email == resource.data.email
+            && request.resource.data.get('approved', true) == resource.data.get('approved', true));
 
       // Delete: admin only
       allow delete: if isAdmin();
     }
 
     // ── orgs/{orgId} — shared org chart data ────────────────────────
-    // Pending users are signed in but NOT approved → no read access.
+    // Only approved users can read; only admin/editor (approved) can write.
     match /orgs/{orgId} {
       allow read:  if isApproved();
       allow write: if canEdit();

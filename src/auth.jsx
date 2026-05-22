@@ -4,6 +4,7 @@ console.log('%c[auth.jsx] LOADED', 'color:#FFA000;font-weight:bold');
 const AuthContext = React.createContext({
   user: null,
   role: 'viewer',
+  approved: true,
   loading: true,
   error: null,
 });
@@ -15,9 +16,11 @@ function useAuth() {
 // ── AuthProvider — listens to Firebase auth state, syncs role from Firestore ───
 function AuthProvider({ children }) {
   const [user, setUser]       = React.useState(null);
-  // Default to 'pending' so unknown / new users are blocked by AuthGate until
-  // their role is loaded from Firestore (or an admin approves them).
-  const [role, setRole]       = React.useState('pending');
+  const [role, setRole]       = React.useState('viewer');
+  // Approval flag — new signups land with approved=false and have to wait
+  // for an admin to flip it true. Legacy users (created before this flag
+  // existed) are treated as approved (undefined → true) for back-compat.
+  const [approved, setApproved] = React.useState(true);
   const [loading, setLoading] = React.useState(true);
   const [error, setError]     = React.useState(null);
 
@@ -36,7 +39,8 @@ function AuthProvider({ children }) {
 
       if (!u) {
         setUser(null);
-        setRole('pending');
+        setRole('viewer');
+        setApproved(true);
         setLoading(false);
         return;
       }
@@ -49,26 +53,34 @@ function AuthProvider({ children }) {
 
         if (!snap.exists) {
           // First sign-in — create user doc.
-          // Admins-by-email bootstrap straight to 'admin'. Everyone else lands
-          // in 'pending' and must be approved by an admin before they can
-          // read the org chart (AuthGate blocks them until role changes).
+          // Admins-by-email bootstrap straight to 'admin' and pre-approved.
+          // Everyone else gets role 'viewer' with approved=false — they must
+          // be approved by an admin before AuthGate lets them past.
+          //
+          // We deliberately use the existing 'viewer' role plus a separate
+          // approved flag (instead of a new 'pending' role) so this works
+          // without needing to update the deployed Firestore Security Rules.
           await userRef.set({
             email: u.email,
             displayName: u.displayName || (u.email || '').split('@')[0],
-            role: isAdminEmail ? 'admin' : 'pending',
+            role: isAdminEmail ? 'admin' : 'viewer',
+            approved: isAdminEmail ? true : false,
             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
           });
         } else if (isAdminEmail && snap.data().role !== 'admin') {
           // Promote to admin if email is in whitelist but doc wasn't
-          await userRef.update({ role: 'admin' });
+          await userRef.update({ role: 'admin', approved: true });
         }
 
-        // Subscribe to live role changes — so admin approval / promotion is
-        // reflected instantly without the user having to refresh.
+        // Subscribe to live role + approval changes — so admin approval /
+        // promotion is reflected instantly without the user having to refresh.
         roleUnsub = userRef.onSnapshot((d) => {
           if (d.exists) {
-            const r = d.data().role || 'pending';
-            setRole(r);
+            const data = d.data();
+            setRole(data.role || 'viewer');
+            // Legacy users created before the approved flag existed are
+            // treated as approved (undefined → true).
+            setApproved(data.approved !== false);
           }
         });
 
@@ -82,7 +94,8 @@ function AuthProvider({ children }) {
         console.error('[auth] user-doc bootstrap failed:', err);
         setError(err.message || String(err));
         setUser({ uid: u.uid, email: u.email });
-        setRole('pending');
+        setRole('viewer');
+        setApproved(false);
       } finally {
         setLoading(false);
       }
@@ -95,7 +108,7 @@ function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, role, loading, error }}>
+    <AuthContext.Provider value={{ user, role, approved, loading, error }}>
       {children}
     </AuthContext.Provider>
   );
@@ -309,21 +322,26 @@ function PendingApprovalScreen({ user }) {
 
 // ── AuthGate — wraps app; blocks until login + approval complete ────────────
 function AuthGate({ children }) {
-  const { user, role, loading, error } = useAuth();
+  const { user, approved, loading, error } = useAuth();
   if (loading) return <Splash text="กำลังตรวจสอบสิทธิ์..." />;
-  if (error && !user) {
-    return (
-      <div className="splash">
-        <div style={{ textAlign: 'center', maxWidth: 360 }}>
-          <div style={{ color: '#C62828', fontWeight: 700, marginBottom: 8 }}>เกิดข้อผิดพลาด</div>
-          <div style={{ color: '#475569', fontSize: 13 }}>{error}</div>
+  if (!user) {
+    // Only show the full error screen if we don't even have a user — for
+    // signed-in users with a downstream issue, fall through so they can
+    // still see the (possibly pending) approval screen rather than a wall.
+    if (error) {
+      return (
+        <div className="splash">
+          <div style={{ textAlign: 'center', maxWidth: 360 }}>
+            <div style={{ color: '#C62828', fontWeight: 700, marginBottom: 8 }}>เกิดข้อผิดพลาด</div>
+            <div style={{ color: '#475569', fontSize: 13 }}>{error}</div>
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
+    return <LoginScreen />;
   }
-  if (!user) return <LoginScreen />;
   // Signed in but waiting for admin approval — block access to the chart.
-  if (role === 'pending') return <PendingApprovalScreen user={user} />;
+  if (!approved) return <PendingApprovalScreen user={user} />;
   return children;
 }
 
@@ -342,15 +360,15 @@ function UserMenu({ onOpenUserMgmt }) {
     return () => document.removeEventListener('mousedown', close);
   }, []);
 
-  // Admin-only: live-subscribe to users with role=pending so the toolbar can
-  // show a notification badge prompting the admin to review approvals.
+  // Admin-only: live-subscribe to users with approved=false so the toolbar
+  // can show a notification badge prompting the admin to review approvals.
   React.useEffect(() => {
     if (role !== 'admin' || !window.fbDb) {
       setPendingCount(0);
       return;
     }
     const unsub = window.fbDb.collection('users')
-      .where('role', '==', 'pending')
+      .where('approved', '==', false)
       .onSnapshot(
         (snap) => setPendingCount(snap.size),
         (e) => console.warn('[user-menu] pending count subscribe failed:', e.message),
@@ -360,8 +378,8 @@ function UserMenu({ onOpenUserMgmt }) {
 
   if (!user) return null;
 
-  const roleColors = { pending: '#FFC857', admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
-  const roleLabels = { pending: 'รออนุมัติ', admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
+  const roleColors = { admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
+  const roleLabels = { admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
   const initial = ((user.email || 'U')[0] || 'U').toUpperCase();
 
   return (
@@ -465,8 +483,12 @@ function UserManagementModal({ onClose }) {
         const arr = [];
         snap.forEach((doc) => arr.push({ uid: doc.id, ...doc.data() }));
         arr.sort((a, b) => {
-          // Pending users sort to the top so admins notice them immediately.
-          const order = { pending: 0, admin: 1, editor: 2, viewer: 3 };
+          // Pending (approved=false) users sort to the top so admins notice
+          // them immediately. Then by role rank, then email.
+          const ap = (a.approved === false) ? 0 : 1;
+          const bp = (b.approved === false) ? 0 : 1;
+          if (ap !== bp) return ap - bp;
+          const order = { admin: 0, editor: 1, viewer: 2 };
           return (order[a.role] ?? 9) - (order[b.role] ?? 9)
               || (a.email || '').localeCompare(b.email || '');
         });
@@ -490,6 +512,18 @@ function UserManagementModal({ onClose }) {
     }
   };
 
+  // Approve a pending user — flip approved to true. Optionally also set
+  // their role (defaults to viewer for the green one-click button).
+  const approveUser = async (uid, asRole) => {
+    try {
+      const patch = { approved: true };
+      if (asRole) patch.role = asRole;
+      await window.fbDb.collection('users').doc(uid).update(patch);
+    } catch (e) {
+      alert('อนุมัติไม่สำเร็จ: ' + e.message);
+    }
+  };
+
   // Delete a user's Firestore record. Note: this removes their role/profile
   // but does NOT delete their Firebase Auth account (that requires Admin SDK).
   // If the user signs back in, auth.jsx will recreate the doc with role
@@ -510,9 +544,9 @@ function UserManagementModal({ onClose }) {
     }
   };
 
-  const roleColors = { pending: '#FFC857', admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
-  const roleLabels = { pending: 'รออนุมัติ', admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
-  const pendingCount = users.filter(u => u.role === 'pending').length;
+  const roleColors = { admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
+  const roleLabels = { admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
+  const pendingCount = users.filter(u => u.approved === false).length;
   const filtered = users.filter(u =>
     !filter.trim() ||
     (u.email || '').toLowerCase().includes(filter.toLowerCase()) ||
@@ -568,16 +602,16 @@ function UserManagementModal({ onClose }) {
           ) : (
             filtered.map((u) => {
               const isSelf = currentUser && u.uid === currentUser.uid;
-              const isPending = u.role === 'pending';
+              const isPending = u.approved === false;
               return (
                 <div key={u.uid} style={{
                   display: 'flex', alignItems: 'center', gap: 12,
                   padding: '12px 16px', borderBottom: '1px solid var(--line)',
-                  background: isPending ? 'rgba(255,200,87,0.10)' : 'transparent',
+                  background: isPending ? 'rgba(255,200,87,0.12)' : 'transparent',
                 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: '50%',
-                    background: roleColors[u.role] || '#94A3B8',
+                    background: isPending ? '#FFC857' : (roleColors[u.role] || '#94A3B8'),
                     color: '#fff',
                     display: 'grid', placeItems: 'center',
                     fontWeight: 800, fontSize: 14, flexShrink: 0,
@@ -606,12 +640,12 @@ function UserManagementModal({ onClose }) {
                       <div style={{ fontSize: 11, color: 'var(--ink-3)' }}>{u.displayName}</div>
                     )}
                   </div>
-                  {/* For pending users, show a fast "อนุมัติเป็น Viewer" button
-                      alongside the regular role dropdown for finer control. */}
+                  {/* For pending users — fast "อนุมัติ" button (sets approved=true,
+                      keeps current role; defaults to viewer if role was unset). */}
                   {isPending && !isSelf && (
                     <button
-                      onClick={() => changeRole(u.uid, 'viewer')}
-                      title="อนุมัติเป็น Viewer ทันที"
+                      onClick={() => approveUser(u.uid, u.role || 'viewer')}
+                      title="อนุมัติให้เข้าใช้งานเป็น Viewer"
                       style={{
                         padding: '6px 12px',
                         borderRadius: 6,
@@ -629,10 +663,10 @@ function UserManagementModal({ onClose }) {
                     </button>
                   )}
                   <select
-                    value={u.role || 'pending'}
+                    value={u.role || 'viewer'}
                     onChange={(e) => changeRole(u.uid, e.target.value)}
                     disabled={isSelf}
-                    title={isSelf ? 'ไม่สามารถเปลี่ยนสิทธิ์ตัวเองได้' : ''}
+                    title={isSelf ? 'ไม่สามารถเปลี่ยนสิทธิ์ตัวเองได้' : 'เปลี่ยนสิทธิ์'}
                     style={{
                       padding: '6px 10px', borderRadius: 6,
                       border: `1.5px solid ${roleColors[u.role] || '#94A3B8'}`,
@@ -643,7 +677,6 @@ function UserManagementModal({ onClose }) {
                       fontFamily: 'inherit',
                     }}
                   >
-                    <option value="pending">รออนุมัติ</option>
                     <option value="admin">Admin</option>
                     <option value="editor">Editor</option>
                     <option value="viewer">Viewer</option>
@@ -693,6 +726,8 @@ function UserManagementModal({ onClose }) {
           <b style={{ color: '#5DADE2' }}>Viewer</b> = ดูอย่างเดียว &nbsp; · &nbsp;
           <b style={{ color: '#FF8A3D' }}>Editor</b> = แก้ Org Chart ได้ &nbsp; · &nbsp;
           <b style={{ color: '#E53935' }}>Admin</b> = แก้ทุกอย่าง + จัดการผู้ใช้
+          <br />
+          <span style={{ opacity: 0.75 }}>กด "อนุมัติ" สีเขียวเพื่อให้ user เข้าใช้งานได้ — สามารถเปลี่ยนสิทธิ์ภายหลังด้วย dropdown</span>
         </div>
       </div>
     </div>
