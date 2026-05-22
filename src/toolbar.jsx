@@ -12,6 +12,14 @@ function Toolbar({
   const [searchFocus, setSearchFocus] = React.useState(false);
   const fileRef = React.useRef(null);
   const nameRef = React.useRef(null);
+  // Local fallback when the <img> fails to decode (e.g. legacy mojibake-corrupted
+  // base64 still cached in Firestore). When true, render the SVG placeholder
+  // even though logoUrl is non-empty — this keeps the brand area looking clean
+  // for viewers and shows the "เปลี่ยน" prompt to admins so they can re-upload.
+  const [logoImgBroken, setLogoImgBroken] = React.useState(false);
+  // Reset the broken flag whenever logoUrl actually changes (e.g. admin
+  // uploaded a new image, or Firestore pushed a fresh one).
+  React.useEffect(() => { setLogoImgBroken(false); }, [logoUrl]);
   // Zoom input
   const [editingZoom, setEditingZoom] = React.useState(false);
   const [zoomDraft, setZoomDraft]     = React.useState('');
@@ -43,15 +51,22 @@ function Toolbar({
           title={canWrite ? "คลิกเพื่ออัปโหลดโลโก้" : "โหมดดูอย่างเดียว"}
           style={canWrite ? {} : { cursor: 'default' }}
         >
-          {logoUrl ? (
-            <img src={logoUrl} alt="logo" />
+          {logoUrl && !logoImgBroken ? (
+            <img
+              src={logoUrl}
+              alt=""
+              onError={() => {
+                console.warn('[brand-logo] image failed to load — falling back to placeholder');
+                setLogoImgBroken(true);
+              }}
+            />
           ) : (
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
               <path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z" fill="#fff" />
               <circle cx="18" cy="18" r="3" fill="#fff" />
             </svg>
           )}
-          <span className="brand-logo-overlay">เปลี่ยน</span>
+          <span className="brand-logo-overlay">{canWrite ? 'เปลี่ยน' : ''}</span>
         </button>
         <input
           ref={fileRef}

@@ -264,33 +264,50 @@ function App() {
   }, [didFirstLoad, syncStatus, role, people.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-heal: detect broken logo data URL and silently restore from SEED ─
-  // Older buggy versions pushed a mojibake-corrupted base64 string to Firestore.
-  // Detect it by validating that the body after the comma is pure base64
-  // (A-Z a-z 0-9 + / =). Mojibake injects non-ASCII bytes, which fail this.
+  // Definitively validate the logo by trying to base64-decode the payload and
+  // checking for the PNG magic bytes (89 50 4E 47). This catches every kind
+  // of corruption: mojibake non-ASCII chars, truncation, wrong alignment.
   const autoHealLogoRef = React.useRef(false);
   React.useEffect(() => {
     if (autoHealLogoRef.current) return;
     if (role !== 'admin' || !canWrite) return;
     if (!didFirstLoad || syncStatus === 'connecting') return;
     if (!logoUrl || !logoUrl.startsWith('data:')) return;
-    if (!SEED.logo || SEED.logo === logoUrl) return; // already clean
+    if (!SEED.logo || SEED.logo === logoUrl) return; // already in sync with seed
 
-    // Detect broken base64: anything outside [A-Za-z0-9+/=] after the comma
-    const commaIdx = logoUrl.indexOf(',');
-    const payload = commaIdx === -1 ? logoUrl : logoUrl.slice(commaIdx + 1);
-    const hasInvalidChars = /[^A-Za-z0-9+/=]/.test(payload);
-    if (!hasInvalidChars) {
-      // Looks structurally valid — only heal if it differs hugely in length
-      // (mojibake doubles/triples char count vs the clean version).
-      const lenRatio = logoUrl.length / SEED.logo.length;
-      if (lenRatio > 0.8 && lenRatio < 1.25) return; // close enough, leave alone
+    let isValid = false;
+    let reason = '';
+    try {
+      const commaIdx = logoUrl.indexOf(',');
+      if (commaIdx === -1) { reason = 'no comma in data URL'; }
+      else {
+        const payload = logoUrl.slice(commaIdx + 1);
+        // atob throws on invalid base64 or non-ASCII chars
+        const bin = atob(payload);
+        // Check PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
+        // (we accept JPEG too: FF D8 FF)
+        const isPNG = bin.length >= 8
+          && bin.charCodeAt(0) === 0x89
+          && bin.charCodeAt(1) === 0x50
+          && bin.charCodeAt(2) === 0x4E
+          && bin.charCodeAt(3) === 0x47;
+        const isJPEG = bin.length >= 3
+          && bin.charCodeAt(0) === 0xFF
+          && bin.charCodeAt(1) === 0xD8
+          && bin.charCodeAt(2) === 0xFF;
+        if (!isPNG && !isJPEG) { reason = 'no PNG/JPEG header in decoded bytes'; }
+        else { isValid = true; }
+      }
+    } catch (e) {
+      reason = 'atob failed: ' + e.message;
     }
+    if (isValid) return; // logo is fine
 
     autoHealLogoRef.current = true;
-    console.warn('%c[auto-heal] logo URL malformed — restoring SEED to Firestore', 'color:#FF6B47;font-weight:bold', {
+    console.warn('%c[auto-heal] logo corrupted — restoring SEED to Firestore', 'color:#FF6B47;font-weight:bold', {
       currentLen: logoUrl.length,
       seedLen: SEED.logo.length,
-      hasInvalidChars,
+      reason,
     });
     const seedPayload = buildSeedPayload();
     forceWrite(seedPayload).then((r) => {
