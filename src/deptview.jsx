@@ -900,11 +900,13 @@ function DeptCanvas({ departments, people, byId, coOversight, onAddCoOversight, 
       const raw = localStorage.getItem('orgDeptTransform');
       if (raw) return JSON.parse(raw);
     } catch (e) {}
-    return { x: 60, y: 60, k: 1 };
+    const seedT = window.SEED_DATA && window.SEED_DATA.deptTransform;
+    return seedT || { x: 60, y: 60, k: 1 };
   });
-  const hasSavedTransform = React.useRef(
-    (() => { try { return !!localStorage.getItem('orgDeptTransform'); } catch (e) { return false; } })()
-  );
+  const hasSavedTransform = React.useRef((() => {
+    try { if (localStorage.getItem('orgDeptTransform')) return true; } catch (e) {}
+    return !!(window.SEED_DATA && window.SEED_DATA.deptTransform);
+  })());
   const [panning, setPanning]        = React.useState(false);
 
   // Persist pan/zoom transform (debounced so we don't spam localStorage during drag)
@@ -1058,8 +1060,9 @@ function DeptCanvas({ departments, people, byId, coOversight, onAddCoOversight, 
   const [customPos, setCustomPos]       = React.useState(() => {     // nodeId → {x,y} overrides (persisted)
     try {
       const raw = localStorage.getItem('orgDeptCustomPos');
-      return raw ? JSON.parse(raw) : {};
-    } catch (e) { return {}; }
+      if (raw) return JSON.parse(raw);
+    } catch (e) {}
+    return (window.SEED_DATA && window.SEED_DATA.deptCustomPos) || {};
   });
   const [lasso, setLasso]               = React.useState(null);       // rubber-band rect in canvas coords
   const [hudDelConfirm, setHudDelConfirm] = React.useState(false);    // HUD bulk-delete confirm step

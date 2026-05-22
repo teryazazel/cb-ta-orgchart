@@ -47,15 +47,16 @@ function App() {
       return parsed;
     } catch (e) { return fallback; }
   };
-  const [people, setPeople] = React.useState(() => loadSaved('orgPeople', window.SEED_DATA.people));
-  const [departments, setDepartments] = React.useState(() => loadSaved('orgDepartments', window.SEED_DATA.departments));
-  const [history, setHistory] = React.useState(() => loadSaved('orgHistory', window.SEED_DATA.history));
+  const SEED = window.SEED_DATA || {};
+  const [people, setPeople] = React.useState(() => loadSaved('orgPeople', SEED.people || []));
+  const [departments, setDepartments] = React.useState(() => loadSaved('orgDepartments', SEED.departments || []));
+  const [history, setHistory] = React.useState(() => loadSaved('orgHistory', SEED.history || []));
   // Non-hierarchical "works with / coordinates with" links — bidirectional pairs
-  const [collaborations, setCollaborations] = React.useState(() => loadSaved('orgCollaborations', []));
+  const [collaborations, setCollaborations] = React.useState(() => loadSaved('orgCollaborations', SEED.collaborations || []));
   // Co-oversight: [{deptId, personId}] — extra management links for the dept overview
-  const [coOversight, setCoOversight] = React.useState(() => loadSaved('orgCoOversight', []));
+  const [coOversight, setCoOversight] = React.useState(() => loadSaved('orgCoOversight', SEED.coOversight || []));
   // Dept-to-dept oversight links: [{from, to}] — dashed edges in dept overview
-  const [deptLinks, setDeptLinks] = React.useState(() => loadSaved('orgDeptLinks', []));
+  const [deptLinks, setDeptLinks] = React.useState(() => loadSaved('orgDeptLinks', SEED.deptLinks || []));
 
   // Persist on every change
   React.useEffect(() => {
@@ -83,14 +84,17 @@ function App() {
     try { localStorage.setItem('orgDeptLinks', JSON.stringify(deptLinks)); } catch (e) {}
   }, [deptLinks]);
 
-  // Branding (persists in localStorage)
+  // Branding (persists in localStorage, falls back to seed)
   const [orgName, setOrgName] = React.useState(() => {
-    try { return localStorage.getItem('orgName') || 'CB TA TRADING'; }
-    catch (e) { return 'CB TA TRADING'; }
+    try { return localStorage.getItem('orgName') || SEED.name || 'CB TA TRADING'; }
+    catch (e) { return SEED.name || 'CB TA TRADING'; }
   });
   const [logoUrl, setLogoUrl] = React.useState(() => {
-    try { return localStorage.getItem('orgLogo') || ''; }
-    catch (e) { return ''; }
+    try {
+      const stored = localStorage.getItem('orgLogo');
+      if (stored !== null) return stored;
+      return SEED.logo || '';
+    } catch (e) { return SEED.logo || ''; }
   });
   React.useEffect(() => {
     try { localStorage.setItem('orgName', orgName || ''); } catch (e) {}
@@ -111,7 +115,7 @@ function App() {
   // Custom positions: when user drags a card onto empty canvas, we save where
   // they dropped it. Layout always honors customPos before falling back to the
   // tree-computed position.
-  const [customPos, setCustomPos] = React.useState(() => loadSaved('orgCustomPos', {}));
+  const [customPos, setCustomPos] = React.useState(() => loadSaved('orgCustomPos', SEED.customPos || {}));
   React.useEffect(() => {
     try { localStorage.setItem('orgCustomPos', JSON.stringify(customPos)); } catch (e) {}
   }, [customPos]);
@@ -123,7 +127,8 @@ function App() {
   const [collapsed, setCollapsed] = React.useState(() => {
     const saved = loadSaved('orgCollapsed', null);
     if (saved) return saved;
-    const tree = buildTree(window.SEED_DATA.people);
+    if (SEED.collapsed && Object.keys(SEED.collapsed).length > 0) return SEED.collapsed;
+    const tree = buildTree(SEED.people || []);
     const c = {};
     const recur = (id, depth) => {
       const kids = tree.childrenOf[id] || [];
