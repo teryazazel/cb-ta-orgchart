@@ -457,6 +457,26 @@ function UserManagementModal({ onClose }) {
     }
   };
 
+  // Delete a user's Firestore record. Note: this removes their role/profile
+  // but does NOT delete their Firebase Auth account (that requires Admin SDK).
+  // If the user signs back in, auth.jsx will recreate the doc with role
+  // 'pending' — the admin can then reject again or, for permanent block,
+  // disable the auth account in the Firebase Console.
+  const deleteUser = async (u) => {
+    const labelEmail = u.email || u.uid;
+    if (!confirm(
+      `ลบผู้ใช้ "${labelEmail}" ออกจากระบบ?\n\n` +
+      `หมายเหตุ: การลบจะลบเฉพาะข้อมูลสิทธิ์เท่านั้น — บัญชี Firebase ` +
+      `ยังคงอยู่ ถ้าผู้ใช้นี้เข้าระบบอีกครั้งจะกลับมาเป็น "รออนุมัติ" ใหม่ ` +
+      `(ถ้าต้องการบล็อกถาวร ให้ปิดบัญชีที่ Firebase Console)`
+    )) return;
+    try {
+      await window.fbDb.collection('users').doc(u.uid).delete();
+    } catch (e) {
+      alert('ลบผู้ใช้ไม่สำเร็จ: ' + e.message);
+    }
+  };
+
   const roleColors = { pending: '#FFC857', admin: '#E53935', editor: '#FF8A3D', viewer: '#5DADE2' };
   const roleLabels = { pending: 'รออนุมัติ', admin: 'Admin', editor: 'Editor', viewer: 'Viewer' };
   const pendingCount = users.filter(u => u.role === 'pending').length;
@@ -595,6 +615,40 @@ function UserManagementModal({ onClose }) {
                     <option value="editor">Editor</option>
                     <option value="viewer">Viewer</option>
                   </select>
+                  {/* Delete button — admins only; never on themselves */}
+                  <button
+                    onClick={() => deleteUser(u)}
+                    disabled={isSelf}
+                    title={isSelf ? 'ไม่สามารถลบบัญชีตัวเองได้' : 'ลบผู้ใช้'}
+                    aria-label="ลบผู้ใช้"
+                    style={{
+                      width: 30, height: 30,
+                      display: 'grid', placeItems: 'center',
+                      borderRadius: 6,
+                      border: '1.5px solid var(--line)',
+                      background: '#fff',
+                      color: isSelf ? '#CBD5E1' : '#E53935',
+                      cursor: isSelf ? 'not-allowed' : 'pointer',
+                      opacity: isSelf ? 0.5 : 1,
+                      transition: 'all 0.15s',
+                      flexShrink: 0,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (isSelf) return;
+                      e.currentTarget.style.background = '#FEE2E2';
+                      e.currentTarget.style.borderColor = '#E53935';
+                    }}
+                    onMouseLeave={(e) => {
+                      if (isSelf) return;
+                      e.currentTarget.style.background = '#fff';
+                      e.currentTarget.style.borderColor = 'var(--line)';
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                      <path d="M3 4h10M6.5 4V2.5h3V4M5 4l.5 9a1 1 0 001 1h3a1 1 0 001-1L11 4M7 7v4M9 7v4"
+                        stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
                 </div>
               );
             })
