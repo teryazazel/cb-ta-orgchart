@@ -142,17 +142,46 @@ function App() {
     ? useFirestoreSync(syncedState, applyRemote, canWrite, user?.uid)
     : { syncStatus: 'no-doc', didFirstLoad: true, bootstrap: async () => ({ didBootstrap: false }) };
 
-  // First-time migration: if Firestore is empty and we're admin, push local data up
+  // First-time migration: if Firestore is empty and we're admin, push local data up.
+  // Also handles "doc exists but contains empty arrays" — happens when a previous
+  // buggy version pushed empty/corrupted data up to Firestore.
   const bootstrapDoneRef = React.useRef(false);
   React.useEffect(() => {
-    if (!didFirstLoad || syncStatus !== 'no-doc' || role !== 'admin' || bootstrapDoneRef.current) return;
-    bootstrapDoneRef.current = true;
-    bootstrap().then((r) => {
-      if (r && r.didBootstrap) {
-        flashToast('นำข้อมูล local ขึ้น Firestore — ทุกอุปกรณ์เห็นเหมือนกันแล้ว');
-      }
-    });
-  }, [didFirstLoad, syncStatus, role]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!didFirstLoad || role !== 'admin' || bootstrapDoneRef.current) return;
+    if (syncStatus === 'connecting') return;
+
+    const seedPeople = Array.isArray(SEED.people) ? SEED.people : [];
+    if (seedPeople.length === 0) return; // no seed → nothing to restore
+
+    // Case A: doc doesn't exist yet → run normal bootstrap (push current state up)
+    if (syncStatus === 'no-doc') {
+      bootstrapDoneRef.current = true;
+      bootstrap().then((r) => {
+        if (r && r.didBootstrap) {
+          flashToast('นำข้อมูล local ขึ้น Firestore — ทุกอุปกรณ์เห็นเหมือนกันแล้ว');
+        }
+      });
+      return;
+    }
+
+    // Case B: doc exists but people array is empty → restore from seed.
+    // This recovers from a previous broken push that wiped out the org chart.
+    if ((syncStatus === 'synced' || syncStatus === 'offline') && people.length === 0) {
+      bootstrapDoneRef.current = true;
+      console.log('%c[bootstrap] Restoring from seed (remote was empty)', 'color:#FF6B47;font-weight:bold');
+      // Hydrate local state from SEED. The push-to-Firestore effect in
+      // useFirestoreSync picks these up automatically once committed.
+      setPeople(asArr(SEED.people));
+      setDepartments(asArr(SEED.departments));
+      setCollaborations(asArr(SEED.collaborations));
+      setCoOversight(asArr(SEED.coOversight));
+      setDeptLinks(asArr(SEED.deptLinks));
+      setHistory(asArr(SEED.history));
+      if (SEED.name) setOrgName(SEED.name);
+      if (SEED.logo) setLogoUrl(SEED.logo);
+      flashToast('คืนค่าข้อมูลจาก seed — กำลังซิงก์ขึ้น Firestore');
+    }
+  }, [didFirstLoad, syncStatus, role, people.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [selectedId, setSelectedId] = React.useState(null);
   const [searchQ, setSearchQ] = React.useState('');
